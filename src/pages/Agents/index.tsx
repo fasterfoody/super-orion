@@ -227,15 +227,32 @@ export function Agents() {
           )}
 
           <div className="space-y-3">
-            {visibleAgents.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                channelGroups={visibleChannelGroups}
-                onOpenSettings={() => setActiveAgentId(agent.id)}
-                onDelete={() => setAgentToDelete(agent)}
-              />
-            ))}
+            {visibleAgents.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-4">
+                  <Bot className="h-6 w-6 text-muted-foreground" />
+                </div>
+                <p className="text-[15px] font-medium text-foreground/70 mb-1">{t('noAgents') || 'No agents yet'}</p>
+                <p className="text-[13px] text-muted-foreground mb-6">{t('noAgentsHint') || 'Create your first agent to get started'}</p>
+                <Button
+                  onClick={() => setShowAddDialog(true)}
+                  className="h-9 text-[13px] font-medium rounded-full px-4 shadow-none"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-2" />
+                  {t('addAgent')}
+                </Button>
+              </div>
+            ) : (
+              visibleAgents.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  channelGroups={visibleChannelGroups}
+                  onOpenSettings={() => setActiveAgentId(agent.id)}
+                  onDelete={() => setAgentToDelete(agent)}
+                />
+              ))
+            )}
           </div>
         </div>
       </div>
