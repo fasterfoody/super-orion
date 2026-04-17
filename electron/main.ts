@@ -199,7 +199,8 @@ const gatewayWsClient = (() => {
   return { invoke, connect };
 })();
 
-const isDev = process.env.NODE_ENV === 'development';
+// FORCE no dev server - always load from asar
+const isDev = false;
 log(`Starting, isDev=${isDev}, NODE_ENV=${process.env.NODE_ENV}`);
 
 function createWindow() {
@@ -2234,6 +2235,328 @@ ipcMain.handle('shell:openExternal', async (_, url: string) => {
     return '';
   } catch (err) {
     return String(err);
+  }
+});
+
+// ── Runtime Auto-Install IPC Handlers ──────────────────────────────────────────
+
+type ProgressCallback = (phase: string, message: string) => void;
+
+// Detect platform and return Node.js download URL
+function getNodeDownloadInfo() {
+  const platform = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'darwin' : 'linux';
+  const arch = process.arch === 'x64' ? 'x64' : process.arch;
+  const nodeVersion = '22.14.0'; // latest stable as of this build
+  const ext = platform === 'win' ? 'zip' : 'tar.gz';
+  const basename = platform === 'darwin' ? 'node' : `node-v${nodeVersion}-${platform}-${arch}`;
+  const url = `https://nodejs.org/dist/v${nodeVersion}/${basename}.${ext}`;
+  return { platform, arch, nodeVersion, ext, url, basename };
+}
+
+// Detect available package manager (npm > pnpm > bun)
+async function detectPackageManager(): Promise<'npm' | 'pnpm' | 'bun' | null> {
+  const tryCmd = (cmd: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const child = spawn(cmd, ['--version'], { shell: true, timeout: 3000 });
+      child.on('close', (code) => resolve(code === 0));
+      child.on('error', () => resolve(false));
+    });
+  };
+  if (await tryCmd('npm')) return 'npm';
+  if (await tryCmd('pnpm')) return 'pnpm';
+  if (await tryCmd('bun')) return 'bun';
+  return null;
+}
+
+// Check if Node.js is available (either system node or in ~/.local/node)
+async function getNodeVersion(): Promise<string | null> {
+  const tryNode = (cmd: string): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const child = spawn(cmd, ['-p', 'process.versions.node'], { shell: true, timeout: 5000 });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d.toString(); });
+      child.on('close', () => resolve(out.trim() || null));
+      child.on('error', () => resolve(null));
+    });
+  };
+  // Try system node first, then ~/.local/node/bin
+  const homeDir = homedir();
+  const localNode = `${homeDir}/.local/node/bin/node`;
+  for (const cmd of ['node', localNode]) {
+    const v = await tryNode(cmd);
+    if (v) return v;
+  }
+  return null;
+}
+
+// runtime:check — comprehensive status of all runtime components
+ipcMain.handle('runtime:check', async () => {
+  const nodeVersion = await getNodeVersion();
+  const pm = await detectPackageManager();
+
+  // Check openclaw CLI
+  const openclawExists = existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`);
+  let openclawVersion: string | null = null;
+  if (openclawExists) {
+    try {
+      const child = spawn('openclaw', ['--version'], { shell: true, timeout: 5000 });
+      await new Promise<void>((resolve) => {
+        let out = '';
+        child.stdout.on('data', (d) => { out += d.toString(); });
+        child.on('close', () => { openclawVersion = out.trim() || null; resolve(); });
+        child.on('error', () => resolve());
+      });
+    } catch {}
+  }
+
+  // Check gateway (HTTP health check)
+  let gatewayRunning = false;
+  let gatewayPort = 18789;
+  try {
+    const http = require('http') as typeof import('http');
+    await new Promise<void>((resolve) => {
+      const req = http.request(
+        { host: '127.0.0.1', port: gatewayPort, path: '/health', method: 'GET', timeout: 3000 },
+        (res: import('http').IncomingMessage) => {
+          gatewayRunning = res.statusCode === 200;
+          res.on('data', () => {});
+          res.on('end', resolve);
+        },
+      );
+      req.on('error', () => {});
+      req.on('timeout', () => { req.destroy(); });
+      req.end();
+    });
+  } catch {}
+
+  return {
+    node: { exists: !!nodeVersion, version: nodeVersion },
+    openclaw: { exists: openclawExists, version: openclawVersion },
+    gateway: { running: gatewayRunning, port: gatewayPort },
+    packageManager: pm,
+  };
+});
+
+// runtime:installNode — download and install Node.js to ~/.local/node/
+ipcMain.handle('runtime:installNode', async () => {
+  const onProgress = (msg: string) => {
+    mainWindow?.webContents?.send('runtime:progress', { phase: 'node', message: msg });
+  };
+
+  try {
+    // Check if already installed in ~/.local/node
+    const localNodeBin = `${homedir()}/.local/node/bin/node`;
+    if (existsSync(localNodeBin)) {
+      onProgress('Node.js already installed at ~/.local/node');
+      return { success: true };
+    }
+
+    const { platform, nodeVersion, ext, url, basename } = getNodeDownloadInfo();
+    onProgress(`Preparing Node.js ${nodeVersion} download...`);
+
+    const localNodeDir = `${homedir()}/.local/node`;
+
+    // Download to a temp file
+    const tempFile = `/tmp/node-${nodeVersion}.${ext}`;
+
+    onProgress(`Downloading Node.js ${nodeVersion} from nodejs.org...`);
+
+    // Use curl for reliable download with redirects
+    const dl = spawn('curl', ['-L', '-f', '--progress-bar', `-o${tempFile}`, url], { shell: true });
+    await new Promise<void>((resolve, reject) => {
+      dl.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`Download failed with code ${code}`));
+      });
+      dl.on('error', reject);
+    });
+
+    onProgress('Extracting Node.js...');
+
+    // Create ~/.local directory
+    spawn('mkdir', ['-p', localNodeDir], { shell: true });
+
+    if (ext === 'tar.gz') {
+      // Linux/macOS: extract tar.gz
+      await new Promise<void>((resolve, reject) => {
+        const ex = spawn('tar', ['-xzf', tempFile, '-C', localNodeDir, '--strip-components=1'], { shell: true });
+        ex.on('close', (code) => code === 0 ? resolve() : reject(new Error(`tar failed: ${code}`)));
+        ex.on('error', reject);
+      });
+    } else {
+      // Windows: unzip
+      await new Promise<void>((resolve, reject) => {
+        const ex = spawn('unzip', ['-o', tempFile, '-d', localNodeDir], { shell: true });
+        ex.on('close', (code) => code === 0 ? resolve() : reject(new Error(`unzip failed: ${code}`)));
+        ex.on('error', reject);
+      });
+    }
+
+    // Cleanup
+    spawn('rm', ['-f', tempFile], { shell: true });
+
+    // Verify
+    const verify = spawn(`${localNodeBin}`, ['--version'], { shell: true });
+    let verOut = '';
+    verify.stdout.on('data', (d) => { verOut += d.toString(); });
+    await new Promise<void>((resolve) => {
+      verify.on('close', () => resolve());
+    });
+
+    onProgress(`Node.js ${verOut.trim()} installed to ~/.local/node`);
+    return { success: true, version: verOut.trim() };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    onProgress(`Node.js installation failed: ${error}`);
+    return { success: false, error };
+  }
+});
+
+// runtime:installOpenClaw — install openclaw CLI via npm/pnpm/bun
+ipcMain.handle('runtime:installOpenClaw', async () => {
+  const onProgress = (msg: string) => {
+    mainWindow?.webContents?.send('runtime:progress', { phase: 'openclaw', message: msg });
+  };
+
+  try {
+    // Check if already installed
+    const paths = ['/usr/bin/openclaw', `${homedir()}/.npm-global/bin/openclaw`];
+    if (paths.some((p) => existsSync(p))) {
+      onProgress('OpenClaw CLI already installed');
+      return { success: true };
+    }
+
+    const pm = await detectPackageManager();
+    if (!pm) {
+      return { success: false, error: 'No package manager found (npm/pnpm/bun)' };
+    }
+
+    onProgress(`Installing OpenClaw CLI via ${pm}...`);
+
+    // Install globally with the detected package manager
+    const installCmd = pm === 'bun'
+      ? 'bun add -g openclaw'
+      : `${pm} install -g openclaw`;
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(installCmd, [], {
+        shell: true,
+        env: { ...process.env, npm_config_global: 'true' },
+      });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`Install failed: ${stderr || `exit code ${code}`}`));
+      });
+      child.on('error', (e) => reject(e));
+    });
+
+    // Find the installed binary
+    let verOut = '';
+    const binPaths = [
+      '/usr/bin/openclaw',
+      `${homedir()}/.npm-global/bin/openclaw`,
+      `${homedir()}/.local/share/npm-global/bin/openclaw`,
+    ];
+    for (const p of binPaths) {
+      if (existsSync(p)) {
+        try {
+          const child = spawn(p, ['--version'], { shell: true, timeout: 5000 });
+          await new Promise<void>((res) => {
+            child.stdout.on('data', (d) => { verOut += d.toString(); });
+            child.on('close', () => res());
+          });
+          break;
+        } catch {}
+      }
+    }
+
+    onProgress(`OpenClaw ${verOut.trim() || 'CLI'} installed successfully`);
+    return { success: true, version: verOut.trim() || undefined };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    onProgress(`OpenClaw installation failed: ${error}`);
+    return { success: false, error };
+  }
+});
+
+// runtime:installGateway — install and start gateway service
+ipcMain.handle('runtime:installGateway', async () => {
+  const onProgress = (msg: string) => {
+    mainWindow?.webContents?.send('runtime:progress', { phase: 'gateway', message: msg });
+  };
+
+  try {
+    // Find openclaw binary
+    const binPaths = [
+      '/usr/bin/openclaw',
+      `${homedir()}/.npm-global/bin/openclaw`,
+      `${homedir()}/.local/share/npm-global/bin/openclaw`,
+    ];
+    const openclawCmd = binPaths.find((p) => existsSync(p)) || 'openclaw';
+
+    onProgress('Installing gateway service...');
+
+    // Run: openclaw gateway install
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(openclawCmd, ['gateway', 'install'], { shell: true });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0 || stderr.includes('already')) resolve();
+        else reject(new Error(`gateway install failed: ${stderr || code}`));
+      });
+      child.on('error', reject);
+    });
+
+    onProgress('Starting gateway...');
+
+    // Run: openclaw gateway start
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(openclawCmd, ['gateway', 'start'], { shell: true });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0 || stderr.includes('already running') || stderr.includes('started')) resolve();
+        else reject(new Error(`gateway start failed: ${stderr || code}`));
+      });
+      child.on('error', reject);
+    });
+
+    // Wait a moment for gateway to initialize
+    await new Promise((r) => setTimeout(r, 3000));
+
+    // Verify gateway is running
+    let gatewayRunning = false;
+    try {
+      const http = require('http') as typeof import('http');
+      await new Promise<void>((resolve) => {
+        const req = http.request(
+          { host: '127.0.0.1', port: 18789, path: '/health', method: 'GET', timeout: 5000 },
+          (res: import('http').IncomingMessage) => {
+            gatewayRunning = res.statusCode === 200;
+            res.on('data', () => {});
+            res.on('end', resolve);
+          },
+        );
+        req.on('error', () => {});
+        req.on('timeout', () => { req.destroy(); });
+        req.end();
+      });
+    } catch {}
+
+    if (gatewayRunning) {
+      onProgress('Gateway is running on port 18789');
+      return { success: true, running: true, port: 18789 };
+    } else {
+      onProgress('Gateway service installed (may take a moment to fully start)');
+      return { success: true, running: false, port: 18789 };
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    onProgress(`Gateway installation failed: ${error}`);
+    return { success: false, error };
   }
 });
 

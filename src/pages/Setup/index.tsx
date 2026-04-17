@@ -378,20 +378,57 @@ interface RuntimeContentProps {
   onStatusChange: (canProceed: boolean) => void;
 }
 
+type CheckStatus = 'checking' | 'success' | 'error' | 'installing';
+
+interface CheckState {
+  status: CheckStatus;
+  message: string;
+}
+
 function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const { t } = useTranslation('setup');
   const gatewayStatus = useGatewayStore((state) => state.status);
   const startGateway = useGatewayStore((state) => state.start);
 
-  const [checks, setChecks] = useState({
-    nodejs: { status: 'checking' as 'checking' | 'success' | 'error', message: '' },
-    openclaw: { status: 'checking' as 'checking' | 'success' | 'error', message: '' },
-    gateway: { status: 'checking' as 'checking' | 'success' | 'error', message: '' },
+  const [checks, setChecks] = useState<{
+    nodejs: CheckState;
+    openclaw: CheckState;
+    gateway: CheckState;
+  }>({
+    nodejs: { status: 'checking', message: '' },
+    openclaw: { status: 'checking', message: '' },
+    gateway: { status: 'checking', message: '' },
   });
+  const [installProgress, setInstallProgress] = useState<{
+    nodejs: string;
+    openclaw: string;
+    gateway: string;
+  }>({ nodejs: '', openclaw: '', gateway: '' });
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState('');
   const [openclawDir, setOpenclawDir] = useState('');
   const gatewayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const installRef = useRef(false);
+
+  // Subscribe to installation progress events from main process
+  useEffect(() => {
+    const unsub = subscribeHostEvent<{ phase: string; message: string }>(
+      'runtime:progress',
+      (data) => {
+        if (data.phase === 'node') {
+          setInstallProgress((prev) => ({ ...prev, nodejs: data.message }));
+          setChecks((prev) => ({ ...prev, nodejs: { status: 'installing', message: data.message } }));
+        } else if (data.phase === 'openclaw') {
+          setInstallProgress((prev) => ({ ...prev, openclaw: data.message }));
+          setChecks((prev) => ({ ...prev, openclaw: { status: 'installing', message: data.message } }));
+        } else if (data.phase === 'gateway') {
+          setInstallProgress((prev) => ({ ...prev, gateway: data.message }));
+          setChecks((prev) => ({ ...prev, gateway: { status: 'installing', message: data.message } }));
+        }
+      },
+    );
+    return unsub;
+  }, []);
 
   const runChecks = useCallback(async () => {
     // Reset checks
@@ -400,92 +437,80 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       openclaw: { status: 'checking', message: '' },
       gateway: { status: 'checking', message: '' },
     });
+    setInstallProgress({ nodejs: '', openclaw: '', gateway: '' });
 
-    // Check Node.js — always available in Electron
-    setChecks((prev) => ({
-      ...prev,
-      nodejs: { status: 'success', message: t('runtime.status.success') },
-    }));
-
-    // Check OpenClaw package status
+    // Use the new comprehensive runtime:check IPC
     try {
-      const openclawStatus = await invokeIpc('openclaw:status') as {
-        packageExists: boolean;
-        isBuilt: boolean;
-        dir: string;
-        version?: string;
+      const result = await invokeIpc('runtime:check') as {
+        node: { exists: boolean; version: string | null };
+        openclaw: { exists: boolean; version: string | null };
+        gateway: { running: boolean; port: number };
+        packageManager: string | null;
       };
 
-      setOpenclawDir(openclawStatus.dir);
-
-      if (!openclawStatus.packageExists) {
+      // Node.js
+      if (result.node.exists && result.node.version) {
         setChecks((prev) => ({
           ...prev,
-          openclaw: {
-            status: 'error',
-            message: `OpenClaw package not found at: ${openclawStatus.dir}`
-          },
-        }));
-      } else if (!openclawStatus.isBuilt) {
-        setChecks((prev) => ({
-          ...prev,
-          openclaw: {
-            status: 'error',
-            message: 'OpenClaw package found but dist is missing'
-          },
+          nodejs: { status: 'success', message: `v${result.node.version}` },
         }));
       } else {
-        const versionLabel = openclawStatus.version ? ` v${openclawStatus.version}` : '';
+        setChecks((prev) => ({
+          ...prev,
+          nodejs: { status: 'error', message: 'Node.js not found' },
+        }));
+      }
+
+      // OpenClaw CLI
+      if (result.openclaw.exists) {
         setChecks((prev) => ({
           ...prev,
           openclaw: {
             status: 'success',
-            message: `OpenClaw package ready${versionLabel}`
+            message: result.openclaw.version
+              ? `v${result.openclaw.version}`
+              : 'Ready',
           },
+        }));
+      } else {
+        setChecks((prev) => ({
+          ...prev,
+          openclaw: { status: 'error', message: 'OpenClaw CLI not found' },
+        }));
+      }
+
+      // Gateway
+      if (result.gateway.running) {
+        setChecks((prev) => ({
+          ...prev,
+          gateway: { status: 'success', message: `Running on port ${result.gateway.port}` },
+        }));
+      } else {
+        setChecks((prev) => ({
+          ...prev,
+          gateway: { status: 'checking', message: 'Waiting for gateway...' },
         }));
       }
     } catch (error) {
-      setChecks((prev) => ({
-        ...prev,
-        openclaw: { status: 'error', message: `Check failed: ${error}` },
-      }));
+      // Fallback to old checks if runtime:check fails
+      setChecks({
+        nodejs: { status: 'error', message: 'Check failed — please install Node.js' },
+        openclaw: { status: 'checking', message: '' },
+        gateway: { status: 'checking', message: '' },
+      });
     }
-
-    // Check Gateway — read directly from store to avoid stale closure
-    // Don't immediately report error; gateway may still be initializing
-    const currentGateway = useGatewayStore.getState().status;
-    if (currentGateway.state === 'running') {
-      setChecks((prev) => ({
-        ...prev,
-        gateway: { status: 'success', message: `Running on port ${currentGateway.port}` },
-      }));
-    } else if (currentGateway.state === 'error') {
-      setChecks((prev) => ({
-        ...prev,
-        gateway: { status: 'error', message: currentGateway.error || t('runtime.status.error') },
-      }));
-    } else {
-      // Gateway is 'stopped', 'starting', or 'reconnecting'
-      // Keep as 'checking' — the dedicated useEffect will update when status changes
-      setChecks((prev) => ({
-        ...prev,
-        gateway: {
-          status: 'checking',
-          message: currentGateway.state === 'starting' ? t('runtime.status.checking') : 'Waiting for gateway...'
-        },
-      }));
-    }
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     runChecks();
   }, [runChecks]);
 
-  // Update canProceed when gateway status changes
+  // Update canProceed when checks change
   useEffect(() => {
-    const allPassed = checks.nodejs.status === 'success'
-      && checks.openclaw.status === 'success'
-      && (checks.gateway.status === 'success' || gatewayStatus.state === 'running');
+    const allPassed =
+      checks.nodejs.status === 'success' &&
+      checks.openclaw.status === 'success' &&
+      (checks.gateway.status === 'success' || gatewayStatus.state === 'running');
     onStatusChange(allPassed);
   }, [checks, gatewayStatus, onStatusChange]);
 
@@ -507,41 +532,132 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         gateway: { status: 'checking', message: 'Starting...' },
       }));
     }
-    // 'stopped' state: keep current check status (likely 'checking') to allow startup time
   }, [gatewayStatus, t]);
 
-  // Gateway startup timeout — show error only after giving enough time to initialize
+  // Gateway startup timeout
   useEffect(() => {
     if (gatewayTimeoutRef.current) {
       clearTimeout(gatewayTimeoutRef.current);
       gatewayTimeoutRef.current = null;
     }
-
-    // If gateway is already in a terminal state, no timeout needed
-    if (gatewayStatus.state === 'running' || gatewayStatus.state === 'error') {
-      return;
-    }
-
-    // Set timeout for non-terminal states (stopped, starting, reconnecting)
+    if (gatewayStatus.state === 'running' || gatewayStatus.state === 'error') return;
     gatewayTimeoutRef.current = setTimeout(() => {
       setChecks((prev) => {
         if (prev.gateway.status === 'checking') {
-          return {
-            ...prev,
-            gateway: { status: 'error', message: 'Gateway startup timed out' },
-          };
+          return { ...prev, gateway: { status: 'error', message: 'Gateway startup timed out' } };
         }
         return prev;
       });
-    }, 600 * 1000); // 600 seconds — enough for gateway to fully initialize
-
+    }, 600 * 1000);
     return () => {
-      if (gatewayTimeoutRef.current) {
-        clearTimeout(gatewayTimeoutRef.current);
-        gatewayTimeoutRef.current = null;
-      }
+      if (gatewayTimeoutRef.current) clearTimeout(gatewayTimeoutRef.current);
     };
   }, [gatewayStatus.state]);
+
+  // ── Installation Handlers ──────────────────────────────────────────────
+
+  const handleInstallNode = async () => {
+    if (installRef.current) return;
+    installRef.current = true;
+    setChecks((prev) => ({ ...prev, nodejs: { status: 'installing', message: 'Installing Node.js...' } }));
+    try {
+      const result = await invokeIpc('runtime:installNode') as { success: boolean; error?: string; version?: string };
+      if (result.success) {
+        setChecks((prev) => ({
+          ...prev,
+          nodejs: { status: 'success', message: result.version ? `v${result.version}` : 'Installed' },
+        }));
+        // Re-check openclaw and gateway (they may now be findable)
+        await runChecks();
+      } else {
+        setChecks((prev) => ({ ...prev, nodejs: { status: 'error', message: result.error || 'Installation failed' } }));
+      }
+    } catch (err) {
+      setChecks((prev) => ({ ...prev, nodejs: { status: 'error', message: String(err) } }));
+    } finally {
+      installRef.current = false;
+    }
+  };
+
+  const handleInstallOpenClaw = async () => {
+    if (installRef.current) return;
+    installRef.current = true;
+    setChecks((prev) => ({ ...prev, openclaw: { status: 'installing', message: 'Installing OpenClaw CLI...' } }));
+    try {
+      const result = await invokeIpc('runtime:installOpenClaw') as { success: boolean; error?: string; version?: string };
+      if (result.success) {
+        setChecks((prev) => ({
+          ...prev,
+          openclaw: {
+            status: 'success',
+            message: result.version ? `v${result.version}` : 'Installed',
+          },
+        }));
+        await runChecks();
+      } else {
+        setChecks((prev) => ({
+          ...prev,
+          openclaw: { status: 'error', message: result.error || 'Installation failed' },
+        }));
+      }
+    } catch (err) {
+      setChecks((prev) => ({ ...prev, openclaw: { status: 'error', message: String(err) } }));
+    } finally {
+      installRef.current = false;
+    }
+  };
+
+  const handleInstallGateway = async () => {
+    if (installRef.current) return;
+    installRef.current = true;
+    setChecks((prev) => ({ ...prev, gateway: { status: 'installing', message: 'Installing gateway...' } }));
+    try {
+      const result = await invokeIpc('runtime:installGateway') as {
+        success: boolean;
+        error?: string;
+        running?: boolean;
+        port?: number;
+      };
+      if (result.success) {
+        if (result.running) {
+          setChecks((prev) => ({
+            ...prev,
+            gateway: { status: 'success', message: `Running on port ${result.port || 18789}` },
+          }));
+        } else {
+          setChecks((prev) => ({
+            ...prev,
+            gateway: { status: 'checking', message: 'Gateway installed, starting...' },
+          }));
+        }
+        await runChecks();
+      } else {
+        setChecks((prev) => ({
+          ...prev,
+          gateway: { status: 'error', message: result.error || 'Installation failed' },
+        }));
+      }
+    } catch (err) {
+      setChecks((prev) => ({ ...prev, gateway: { status: 'error', message: String(err) } }));
+    } finally {
+      installRef.current = false;
+    }
+  };
+
+  // Install all missing components in sequence
+  const handleInstallAll = async () => {
+    if (checks.nodejs.status === 'error' || checks.nodejs.status === 'idle') {
+      await handleInstallNode();
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (checks.openclaw.status === 'error') {
+      await handleInstallOpenClaw();
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (checks.gateway.status === 'error' || checks.gateway.status === 'checking') {
+      await handleInstallGateway();
+    }
+  };
 
   const handleStartGateway = async () => {
     setChecks((prev) => ({
@@ -575,12 +691,20 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
 
   const ERROR_TRUNCATE_LEN = 30;
 
-  const renderStatus = (status: 'checking' | 'success' | 'error', message: string) => {
+  const renderStatus = (status: CheckStatus, message: string) => {
     if (status === 'checking') {
       return (
         <span className="flex items-center gap-2 text-yellow-400 whitespace-nowrap">
           <Loader2 className="h-5 w-5 flex-shrink-0 animate-spin" />
           {message || 'Checking...'}
+        </span>
+      );
+    }
+    if (status === 'installing') {
+      return (
+        <span className="flex items-center gap-2 text-blue-400 whitespace-nowrap">
+          <Loader2 className="h-5 w-5 flex-shrink-0 animate-spin" />
+          {message || 'Installing...'}
         </span>
       );
     }
@@ -614,6 +738,9 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     );
   };
 
+  const needsInstall = checks.nodejs.status === 'error' || checks.openclaw.status === 'error' || checks.gateway.status === 'error';
+  const isInstalling = checks.nodejs.status === 'installing' || checks.openclaw.status === 'installing' || checks.gateway.status === 'installing';
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between mb-4">
@@ -629,50 +756,101 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         </div>
       </div>
       <div className="space-y-3">
+        {/* Node.js row */}
         <div className="grid grid-cols-[1fr_auto] items-center gap-4 p-3 rounded-lg bg-muted/50">
-          <span className="text-left">{t('runtime.nodejs')}</span>
-          <div className="flex justify-end">
+          <div className="flex items-center gap-2">
+            <span className="text-left">{t('runtime.nodejs')}</span>
+            {installProgress.nodejs && (
+              <span className="text-xs text-blue-400/70">{installProgress.nodejs}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {checks.nodejs.status === 'error' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleInstallNode}
+                disabled={isInstalling}
+                className="text-xs"
+              >
+                {isInstalling ? 'Installing...' : 'Install'}
+              </Button>
+            )}
             {renderStatus(checks.nodejs.status, checks.nodejs.message)}
           </div>
         </div>
+
+        {/* OpenClaw CLI row */}
         <div className="grid grid-cols-[1fr_auto] items-center gap-4 p-3 rounded-lg bg-muted/50">
-          <div className="text-left min-w-0">
-            <span>{t('runtime.openclaw')}</span>
-            {openclawDir && (
-              <p className="text-xs text-muted-foreground mt-0.5 font-mono break-all">
-                {openclawDir}
-              </p>
+          <div className="flex items-center gap-2">
+            <span className="text-left">{t('runtime.openclaw')}</span>
+            {installProgress.openclaw && (
+              <span className="text-xs text-blue-400/70">{installProgress.openclaw}</span>
             )}
           </div>
-          <div className="flex justify-end self-start mt-0.5">
+          <div className="flex items-center gap-2">
+            {checks.openclaw.status === 'error' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleInstallOpenClaw}
+                disabled={isInstalling}
+                className="text-xs"
+              >
+                {isInstalling ? 'Installing...' : 'Install'}
+              </Button>
+            )}
             {renderStatus(checks.openclaw.status, checks.openclaw.message)}
           </div>
         </div>
+
+        {/* Gateway row */}
         <div className="grid grid-cols-[1fr_auto] items-center gap-4 p-3 rounded-lg bg-muted/50">
-          <div className="flex items-center gap-2 text-left">
-            <span>{t('runtime.gateway')}</span>
-            {checks.gateway.status === 'error' && (
-              <Button variant="outline" size="sm" onClick={handleStartGateway}>
-                {t('runtime.startGateway')}
-              </Button>
+          <div className="flex items-center gap-2">
+            <span className="text-left">{t('runtime.gateway')}</span>
+            {installProgress.gateway && (
+              <span className="text-xs text-blue-400/70">{installProgress.gateway}</span>
             )}
           </div>
-          <div className="flex justify-end">
+          <div className="flex items-center gap-2">
+            {checks.gateway.status === 'error' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={checks.openclaw.status === 'success' ? handleInstallGateway : handleInstallAll}
+                disabled={isInstalling}
+                className="text-xs"
+              >
+                {isInstalling ? 'Installing...' : 'Install'}
+              </Button>
+            )}
+            {checks.gateway.status === 'checking' && checks.openclaw.status === 'success' && (
+              <Button variant="outline" size="sm" onClick={handleStartGateway} disabled={isInstalling}>
+                Start
+              </Button>
+            )}
             {renderStatus(checks.gateway.status, checks.gateway.message)}
           </div>
         </div>
       </div>
 
-      {(checks.nodejs.status === 'error' || checks.openclaw.status === 'error') && (
-        <div className="mt-4 p-4 rounded-lg bg-red-900/20 border border-red-500/20">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="h-5 w-5 text-red-400 mt-0.5" />
-            <div>
-              <p className="font-medium text-red-400">{t('runtime.issue.title')}</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {t('runtime.issue.desc')}
-              </p>
+      {/* Install All button — shown when multiple components are missing */}
+      {needsInstall && !isInstalling && (
+        <div className="mt-2 p-4 rounded-lg bg-blue-900/20 border border-blue-500/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-5 w-5 text-blue-400 mt-0.5" />
+              <div>
+                <p className="font-medium text-blue-400">{t('runtime.issue.title')}</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {t('runtime.issue.desc')}
+                </p>
+              </div>
             </div>
+            <Button onClick={handleInstallAll} className="ml-4 shrink-0">
+              <Loader2 className="h-4 w-4 mr-2" />
+              Install All
+            </Button>
           </div>
         </div>
       )}
@@ -1708,7 +1886,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
       setOverallProgress(data.percent);
       setStepMessage(data.message);
     };
-    window.electron?.on('install:progress', handleProgress);
+    window.electron?.ipcRenderer?.on('install:progress', handleProgress);
 
     const runRealInstall = async () => {
       try {
@@ -1740,7 +1918,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
         setErrorMessage(String(err));
         toast.error('Installation error');
       } finally {
-        window.electron?.off('install:progress');
+        window.electron?.ipcRenderer?.off('install:progress');
       }
     };
 
