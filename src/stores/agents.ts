@@ -13,6 +13,8 @@ interface AgentsState {
   loading: boolean;
   error: string | null;
   fetchAgents: () => Promise<void>;
+  startAutoRefresh: () => void;
+  stopAutoRefresh: () => void;
   createAgent: (name: string, options?: { inheritWorkspace?: boolean }) => Promise<void>;
   updateAgent: (agentId: string, name: string) => Promise<void>;
   updateAgentModel: (agentId: string, modelRef: string | null) => Promise<void>;
@@ -21,6 +23,8 @@ interface AgentsState {
   removeChannel: (agentId: string, channelType: ChannelType) => Promise<void>;
   clearError: () => void;
 }
+
+let _agentsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 function applySnapshot(snapshot: AgentsSnapshot | undefined) {
   return snapshot ? {
@@ -33,7 +37,7 @@ function applySnapshot(snapshot: AgentsSnapshot | undefined) {
   } : {};
 }
 
-export const useAgentsStore = create<AgentsState>((set) => ({
+export const useAgentsStore = create<AgentsState>((set, get) => ({
   agents: [],
   defaultAgentId: 'main',
   defaultModelRef: null,
@@ -42,6 +46,20 @@ export const useAgentsStore = create<AgentsState>((set) => ({
   channelAccountOwners: {},
   loading: false,
   error: null,
+
+  startAutoRefresh: () => {
+    if (_agentsRefreshTimer) return;
+    _agentsRefreshTimer = setInterval(() => {
+      get().fetchAgents();
+    }, 30_000);
+  },
+
+  stopAutoRefresh: () => {
+    if (_agentsRefreshTimer) {
+      clearInterval(_agentsRefreshTimer);
+      _agentsRefreshTimer = null;
+    }
+  },
 
   fetchAgents: async () => {
     set({ loading: true, error: null });
