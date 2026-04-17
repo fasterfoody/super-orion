@@ -137,7 +137,19 @@ export function Setup() {
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   // devBypass: set providerConfigured=true for dev/testing (e.g. ?devBypass=1 in URL)
   // Note: with HashRouter, URL is like http://host/#/setup?devBypass=1, so search is in hash part
-  const devBypass = new URLSearchParams(window.location.hash.split('?')[1] || '').has('devBypass');
+  const [devBypass, setDevBypass] = useState(() =>
+    new URLSearchParams(window.location.hash.split('?')[1] || '').has('devBypass')
+  );
+  // Keep devBypass in sync with URL hash changes (e.g. when navigating to ?devBypass=1)
+  useEffect(() => {
+    const update = () => {
+      const bypass = new URLSearchParams(window.location.hash.split('?')[1] || '').has('devBypass');
+      setDevBypass(bypass);
+    };
+    update();
+    window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
+  }, []);
   const [providerConfigured, setProviderConfigured] = useState(false);
   const [apiKey, setApiKey] = useState('');
   // Installation state for the Installing step
