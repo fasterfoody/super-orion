@@ -90,6 +90,8 @@ export interface ChatState {
 
   // Actions
   loadSessions: () => Promise<void>;
+  startAutoRefresh: () => void;
+  stopAutoRefresh: () => void;
   switchSession: (key: string) => void;
   newSession: () => void;
   deleteSession: (key: string) => Promise<void>;
