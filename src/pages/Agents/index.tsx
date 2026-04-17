@@ -541,11 +541,13 @@ function AgentSettingsModal({
 
   const handleSaveName = async () => {
     if (!name.trim() || name.trim() === agent.name) return;
+    const originalName = agent.name;
     setSavingName(true);
     try {
       await updateAgent(agent.id, name.trim());
       toast.success(t('toast.agentUpdated'));
     } catch (error) {
+      setName(originalName); // Revert on failure
       toast.error(t('toast.agentUpdateFailed', { error: String(error) }));
     } finally {
       setSavingName(false);
