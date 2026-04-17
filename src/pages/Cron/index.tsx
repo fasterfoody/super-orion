@@ -1012,7 +1012,12 @@ export function Cron() {
           </div>
 
           {/* Jobs List */}
-          {safeJobs.length === 0 ? (
+          {loading && safeJobs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+              <LoadingSpinner size="lg" />
+              <p className="mt-4 text-[14px]">{t('loading') || 'Loading...'}</p>
+            </div>
+          ) : safeJobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground bg-black/5 dark:bg-white/5 rounded-3xl border border-transparent border-dashed">
               <Clock className="h-10 w-10 mb-4 opacity-50" />
               <h3 className="text-lg font-medium mb-2 text-foreground">{t('empty.title')}</h3>
