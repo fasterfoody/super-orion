@@ -3,6 +3,8 @@ import { getCanonicalPrefixFromSessions, getMessageText, toMs } from './helpers'
 import { DEFAULT_CANONICAL_PREFIX, DEFAULT_SESSION_KEY, type ChatSession, type RawMessage } from './types';
 import type { ChatGet, ChatSet, SessionHistoryActions } from './store-api';
 
+let _sessionsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
 function getAgentIdFromSessionKey(sessionKey: string): string {
   if (!sessionKey.startsWith('agent:')) return 'main';
   const [, agentId] = sessionKey.split(':');
@@ -147,6 +149,20 @@ export function createSessionActions(
         }
       } catch (err) {
         console.warn('Failed to load sessions:', err);
+      }
+    },
+
+    startAutoRefresh: () => {
+      if (_sessionsRefreshTimer) return;
+      _sessionsRefreshTimer = setInterval(() => {
+        get().loadSessions();
+      }, 15_000);
+    },
+
+    stopAutoRefresh: () => {
+      if (_sessionsRefreshTimer) {
+        clearInterval(_sessionsRefreshTimer);
+        _sessionsRefreshTimer = null;
       }
     },
 
