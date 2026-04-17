@@ -46,7 +46,7 @@ const gatewayWsClient = (() => {
   let isConnecting = false;
   let connectResolve: Array<(v: void) => void> = [];
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  const GATEWAY_TOKEN = 'clawx-91e9e41c47c7e91d5dc4561598df899a';
+  const GATEWAY_TOKEN = ((readOpenClawConfig().gateway as Record<string, unknown>)?.auth as Record<string, string>)?.token || 'clawx-91e9e41c47c7e91d5dc4561598df899a';
 
   function genId() { return ++requestId; }
 
@@ -1446,11 +1446,13 @@ ipcMain.handle('hostapi:fetch', async (_, request: {
     // ── App / Gateway info ────────────────────────────────────────────────────
     // GET /api/app/gateway-info → return gateway URL, token, port
     if (path === '/api/app/gateway-info' && method === 'GET') {
+      const cfg = readOpenClawConfig();
+      const gwToken = ((cfg.gateway as Record<string, unknown>)?.auth as Record<string, string>)?.token || '89064df8b54ad85a7f1728be9417a13eee25de73121a9b15';
       return {
         ok: true,
         data: {
           status: 200,
-          json: { success: true, url: 'http://127.0.0.1:18789', token: '89064df8b54ad85a7f1728be9417a13eee25de73121a9b15', port: 18789 },
+          json: { success: true, url: 'http://127.0.0.1:18789', token: gwToken, port: 18789 },
         },
         success: true,
       };
@@ -1673,8 +1675,10 @@ ipcMain.handle('hostapi:fetch', async (_, request: {
 });
 
 ipcMain.handle('hostapi:token', () => {
-  // Return the gateway auth token for API calls
-  return '89064df8b54ad85a7f1728be9417a13eee25de73121a9b15';
+  // Return the gateway auth token from openclaw.json
+  const config = readOpenClawConfig();
+  const token = ((config.gateway as Record<string, unknown>)?.auth as Record<string, string>)?.token;
+  return token || '89064df8b54ad85a7f1728be9417a13eee25de73121a9b15';
 });
 
 async function gatewayStatus(): Promise<{ ok: boolean; data?: unknown; error?: unknown; success: boolean }> {
