@@ -68,6 +68,8 @@ interface SkillsState {
 
   // Actions
   fetchSkills: () => Promise<void>;
+  startAutoRefresh: () => void;
+  stopAutoRefresh: () => void;
   searchSkills: (query: string) => Promise<void>;
   installSkill: (slug: string, version?: string) => Promise<void>;
   uninstallSkill: (slug: string) => Promise<void>;
@@ -77,6 +79,8 @@ interface SkillsState {
   updateSkill: (skillId: string, updates: Partial<Skill>) => void;
 }
 
+let _skillsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
 export const useSkillsStore = create<SkillsState>((set, get) => ({
   skills: [],
   searchResults: [],
@@ -85,6 +89,20 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   searchError: null,
   installing: {},
   error: null,
+
+  startAutoRefresh: () => {
+    if (_skillsRefreshTimer) return;
+    _skillsRefreshTimer = setInterval(() => {
+      get().fetchSkills();
+    }, 60_000);
+  },
+
+  stopAutoRefresh: () => {
+    if (_skillsRefreshTimer) {
+      clearInterval(_skillsRefreshTimer);
+      _skillsRefreshTimer = null;
+    }
+  },
 
   fetchSkills: async () => {
     // Only show loading state if we have no skills yet (initial load)
