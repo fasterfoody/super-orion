@@ -50,6 +50,7 @@ let _historyPollTimer: ReturnType<typeof setTimeout> | null = null;
 let _errorRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
 let _loadSessionsInFlight: Promise<void> | null = null;
 let _lastLoadSessionsAt = 0;
+let _sessionsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const _historyLoadInFlight = new Map<string, Promise<void>>();
 const _lastHistoryLoadAtBySession = new Map<string, number>();
 const SESSION_LOAD_MIN_INTERVAL_MS = 1_200;
@@ -1154,6 +1155,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await _loadSessionsInFlight;
     } finally {
       _loadSessionsInFlight = null;
+    }
+  },
+
+  startAutoRefresh: () => {
+    if (_sessionsRefreshTimer) return;
+    _sessionsRefreshTimer = setInterval(() => {
+      get().loadSessions();
+    }, 15_000);
+  },
+
+  stopAutoRefresh: () => {
+    if (_sessionsRefreshTimer) {
+      clearInterval(_sessionsRefreshTimer);
+      _sessionsRefreshTimer = null;
     }
   },
 
