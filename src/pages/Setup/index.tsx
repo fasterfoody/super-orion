@@ -385,6 +385,8 @@ interface CheckState {
   message: string;
 }
 
+const NODE_VERSION = '22.14.0';
+
 function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const { t } = useTranslation('setup');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -489,7 +491,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         // Not running AND not installing → show error (not 'checking' which implies waiting for something to happen)
         setChecks((prev) => ({
           ...prev,
-          gateway: { status: 'error', message: 'Gateway not running' },
+          gateway: { status: 'error', message: `Gateway not running (port ${result.gateway.port})` },
         }));
       }
       // If installRef.current is true (install in progress), don't overwrite — the install handler will update it
@@ -775,7 +777,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
                 disabled={isInstalling}
                 className="text-xs"
               >
-                {isInstalling ? 'Installing...' : 'Install'}
+                {isInstalling ? 'Installing Node.js...' : `Install v${NODE_VERSION}`}
               </Button>
             )}
             {renderStatus(checks.nodejs.status, checks.nodejs.message)}
@@ -799,7 +801,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
                 disabled={isInstalling}
                 className="text-xs"
               >
-                {isInstalling ? 'Installing...' : 'Install'}
+                {isInstalling ? 'Installing OpenClaw...' : 'Install'}
               </Button>
             )}
             {renderStatus(checks.openclaw.status, checks.openclaw.message)}
@@ -823,7 +825,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
                 disabled={isInstalling}
                 className="text-xs"
               >
-                {isInstalling ? 'Installing...' : 'Install'}
+                {isInstalling ? 'Installing Gateway...' : 'Install'}
               </Button>
             )}
             {checks.gateway.status === 'checking' && checks.openclaw.status === 'success' && (
