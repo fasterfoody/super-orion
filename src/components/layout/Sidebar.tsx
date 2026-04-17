@@ -25,6 +25,7 @@ import { useSettingsStore } from '@/stores/settings';
 import { useChatStore } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
+import { useChannelsStore } from '@/stores/channels';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -139,9 +140,16 @@ export function Sidebar() {
       await loadSessions();
       if (cancelled) return;
       await loadHistory(hasExistingMessages);
+      // Start auto-refresh for real-time sync
+      useChatStore.getState().startAutoRefresh();
+      useAgentsStore.getState().startAutoRefresh();
+      useChannelsStore.getState().startAutoRefresh();
     })();
     return () => {
       cancelled = true;
+      useChatStore.getState().stopAutoRefresh();
+      useAgentsStore.getState().stopAutoRefresh();
+      useChannelsStore.getState().stopAutoRefresh();
     };
   }, [isGatewayRunning, loadHistory, loadSessions]);
   const agents = useAgentsStore((s) => s.agents);
