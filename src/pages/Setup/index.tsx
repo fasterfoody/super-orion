@@ -587,9 +587,12 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         await runChecks();
       } else {
         setChecks((prev) => ({ ...prev, nodejs: { status: 'error', message: result.error || 'Installation failed' } }));
+        toast.error(result.error || 'Node.js installation failed');
       }
     } catch (err) {
-      setChecks((prev) => ({ ...prev, nodejs: { status: 'error', message: String(err) } }));
+      const errMsg = String(err);
+      setChecks((prev) => ({ ...prev, nodejs: { status: 'error', message: errMsg } }));
+      toast.error('Node.js installation failed: ' + errMsg);
     } finally {
       installRef.current = false;
     }
@@ -615,9 +618,12 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           ...prev,
           openclaw: { status: 'error', message: result.error || 'Installation failed' },
         }));
+        toast.error(result.error || 'OpenClaw CLI installation failed');
       }
     } catch (err) {
-      setChecks((prev) => ({ ...prev, openclaw: { status: 'error', message: String(err) } }));
+      const errMsg = String(err);
+      setChecks((prev) => ({ ...prev, openclaw: { status: 'error', message: errMsg } }));
+      toast.error('OpenClaw CLI installation failed: ' + errMsg);
     } finally {
       installRef.current = false;
     }
@@ -652,9 +658,12 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           ...prev,
           gateway: { status: 'error', message: result.error || 'Installation failed' },
         }));
+        toast.error(result.error || 'Gateway installation failed');
       }
     } catch (err) {
-      setChecks((prev) => ({ ...prev, gateway: { status: 'error', message: String(err) } }));
+      const errMsg = String(err);
+      setChecks((prev) => ({ ...prev, gateway: { status: 'error', message: errMsg } }));
+      toast.error('Gateway installation failed: ' + errMsg);
     } finally {
       installRef.current = false;
     }
@@ -680,7 +689,13 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       ...prev,
       gateway: { status: 'checking', message: 'Starting...' },
     }));
-    await startGateway();
+    try {
+      await startGateway();
+    } catch (err) {
+      const errMsg = String(err);
+      setChecks((prev) => ({ ...prev, gateway: { status: 'error', message: errMsg } }));
+      toast.error('Failed to start gateway: ' + errMsg);
+    }
   };
 
   const handleShowLogs = async () => {
