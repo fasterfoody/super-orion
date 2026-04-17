@@ -479,18 +479,20 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         }));
       }
 
-      // Gateway
+      // Gateway — only update if not currently installing (installRef guards against overwriting installing state)
       if (result.gateway.running) {
         setChecks((prev) => ({
           ...prev,
           gateway: { status: 'success', message: `Running on port ${result.gateway.port}` },
         }));
-      } else {
+      } else if (!installRef.current) {
+        // Not running AND not installing → show error (not 'checking' which implies waiting for something to happen)
         setChecks((prev) => ({
           ...prev,
-          gateway: { status: 'checking', message: 'Waiting for gateway...' },
+          gateway: { status: 'error', message: 'Gateway not running' },
         }));
       }
+      // If installRef.current is true (install in progress), don't overwrite — the install handler will update it
     } catch (error) {
       // Fallback to old checks if runtime:check fails
       setChecks({
