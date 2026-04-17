@@ -2294,8 +2294,8 @@ ipcMain.handle('runtime:check', async () => {
   const nodeVersion = await getNodeVersion();
   const pm = await detectPackageManager();
 
-  // Check openclaw CLI
-  const openclawExists = existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`);
+  // Check openclaw CLI (including ~/.local/node/bin where we install it)
+  const openclawExists = existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`) || existsSync(`${homedir()}/.local/node/bin/openclaw`);
   let openclawVersion: string | null = null;
   if (openclawExists) {
     try {
@@ -2419,11 +2419,25 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
   };
 
   try {
-    // Check if already installed
-    const paths = ['/usr/bin/openclaw', `${homedir()}/.npm-global/bin/openclaw`];
-    if (paths.some((p) => existsSync(p))) {
+    // Check if already installed (including ~/.local/node/bin where we install it)
+    const openclawPaths = [
+      '/usr/bin/openclaw',
+      `${homedir()}/.npm-global/bin/openclaw`,
+      `${homedir()}/.local/node/bin/openclaw`,
+    ];
+    const existingOpenClaw = openclawPaths.find((p) => existsSync(p));
+    if (existingOpenClaw) {
       onProgress('OpenClaw CLI already installed');
-      return { success: true };
+      // Get version
+      try {
+        const child = spawn(existingOpenClaw, ['--version'], { shell: true, timeout: 5000 });
+        let verOut = '';
+        child.stdout.on('data', (d) => { verOut += d.toString(); });
+        await new Promise<void>((res) => { child.on('close', () => res()); });
+        return { success: true, version: verOut.trim() || undefined };
+      } catch {
+        return { success: true };
+      }
     }
 
     const pm = await detectPackageManager();
@@ -2433,10 +2447,14 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
 
     onProgress(`Installing OpenClaw CLI via ${pm}...`);
 
+    // Use npm from ~/.local/node if available (Node 22), otherwise system npm
+    const localNpm = `${homedir()}/.local/node/bin/npm`;
+    const npmCmd = existsSync(localNpm) ? localNpm : pm;
+
     // Install globally with the detected package manager
     const installCmd = pm === 'bun'
       ? 'bun add -g openclaw'
-      : `${pm} install -g openclaw`;
+      : `${npmCmd} install -g openclaw`;
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn(installCmd, [], {
