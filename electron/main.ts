@@ -2708,21 +2708,40 @@ ipcMain.handle('uv:install-all', async () => {
     // Step 1: Check if OpenClaw CLI is installed
     progress(1, TOTAL_STEPS, 'Checking OpenClaw installation...');
     log('Checking OpenClaw installation...');
-    let openclawInstalled = false;
-    try {
-      execSync('which openclaw', { encoding: 'utf8', timeout: 5000 });
-      openclawInstalled = true;
-      log('OpenClaw CLI found');
-    } catch {
-      log('OpenClaw CLI not found, will install via npm');
+    // Check multiple possible locations including ~/.local/node/bin
+    const openclawPaths = [
+      `${homedir()}/.local/node/bin/openclaw`,
+      '/usr/bin/openclaw',
+      `${homedir()}/.npm-global/bin/openclaw`,
+    ];
+    let openclawInstalled = openclawPaths.some((p) => {
+      try {
+        execSync(`test -f "${p}" && test -x "${p}"`, { encoding: 'utf8', timeout: 5000 });
+        log(`OpenClaw CLI found at ${p}`);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (!openclawInstalled) {
+      try {
+        execSync('which openclaw', { encoding: 'utf8', timeout: 5000 });
+        openclawInstalled = true;
+        log('OpenClaw CLI found in PATH');
+      } catch {
+        log('OpenClaw CLI not found, will install via npm');
+      }
     }
 
     // Step 2: Install OpenClaw if not present
     if (!openclawInstalled) {
       progress(2, TOTAL_STEPS, 'Installing OpenClaw via npm...');
       log('Installing OpenClaw via npm...');
+      // Use Node 22 npm if available, otherwise system npm
+      const localNpm = `${homedir()}/.local/node/bin/npm`;
+      const npmBin = require('fs').existsSync(localNpm) ? localNpm : 'npm';
       try {
-        execSync('npm install -g openclaw', {
+        execSync(`${npmBin} install -g openclaw`, {
           encoding: 'utf8',
           timeout: 120000,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -2736,10 +2755,17 @@ ipcMain.handle('uv:install-all', async () => {
       }
     }
 
+    // Build env with correct PATH (Node 22 first)
+    const localNodeBin = `${homedir()}/.local/node/bin`;
+    const correctEnv = {
+      ...process.env,
+      PATH: `${localNodeBin}:${process.env.PATH || '/usr/bin:/bin'}`,
+    };
+
     // Step 3: Verify openclaw CLI works
     progress(3, TOTAL_STEPS, 'Verifying OpenClaw CLI...');
     try {
-      const version = execSync('openclaw --version', { encoding: 'utf8', timeout: 10000 }).trim();
+      const version = execSync('openclaw --version', { encoding: 'utf8', timeout: 10000, env: correctEnv }).trim();
       log(`OpenClaw version: ${version}`);
     } catch (e: unknown) {
       const emsg = e instanceof Error ? e.message : String(e);
@@ -2752,7 +2778,7 @@ ipcMain.handle('uv:install-all', async () => {
     log('Checking gateway service status...');
     let serviceInstalled = false;
     try {
-      const status = execSync('openclaw daemon status', { encoding: 'utf8', timeout: 15000 });
+      const status = execSync('openclaw daemon status', { encoding: 'utf8', timeout: 15000, env: correctEnv });
       serviceInstalled = status.includes('installed') || status.includes('running') || status.includes('active');
       log(`Gateway service status: ${status.substring(0, 100)}`);
     } catch {
@@ -2765,13 +2791,13 @@ ipcMain.handle('uv:install-all', async () => {
       log('Installing gateway service...');
       try {
         // Try to install as system service (may need sudo)
-        execSync('openclaw daemon install', { encoding: 'utf8', timeout: 60000 });
+        execSync('openclaw daemon install', { encoding: 'utf8', timeout: 60000, env: correctEnv });
         log('Gateway service installed');
       } catch (e) {
         // Fallback: try user-level service
         log('System install failed, trying user-level...');
         try {
-          execSync('openclaw daemon install --user', { encoding: 'utf8', timeout: 60000 });
+          execSync('openclaw daemon install --user', { encoding: 'utf8', timeout: 60000, env: correctEnv });
           log('Gateway service installed (user level)');
         } catch (e2: unknown) {
           const e2msg = e2 instanceof Error ? e2.message : String(e2);
@@ -2785,7 +2811,7 @@ ipcMain.handle('uv:install-all', async () => {
     progress(6, TOTAL_STEPS, 'Starting gateway service...');
     log('Starting gateway service...');
     try {
-      execSync('openclaw daemon start', { encoding: 'utf8', timeout: 30000 });
+      execSync('openclaw daemon start', { encoding: 'utf8', timeout: 30000, env: correctEnv });
       log('Gateway started');
     } catch (e: unknown) {
       const emsg = e instanceof Error ? e.message : String(e);
