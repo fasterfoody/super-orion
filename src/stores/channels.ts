@@ -46,6 +46,8 @@ interface ChannelsState {
 
   // Actions
   fetchChannels: () => Promise<void>;
+  startAutoRefresh: () => void;
+  stopAutoRefresh: () => void;
   fetchChannelGroups: (channelAccountOwners?: Record<string, string>) => Promise<ChannelGroupItem[]>;
   addChannel: (params: AddChannelParams) => Promise<Channel>;
   deleteChannel: (channelId: string) => Promise<void>;
@@ -58,6 +60,8 @@ interface ChannelsState {
   scheduleAutoReconnect: (channelId: string) => void;
   clearAutoReconnect: (channelId: string) => void;
 }
+
+let _channelsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const reconnectAttempts = new Map<string, number>();
@@ -160,6 +164,20 @@ export const useChannelsStore = create<ChannelsState>((set, get) => ({
     } catch {
       // Gateway not connected, show empty
       set({ channels: [], loading: false });
+    }
+  },
+
+  startAutoRefresh: () => {
+    if (_channelsRefreshTimer) return;
+    _channelsRefreshTimer = setInterval(() => {
+      get().fetchChannels();
+    }, 30_000);
+  },
+
+  stopAutoRefresh: () => {
+    if (_channelsRefreshTimer) {
+      clearInterval(_channelsRefreshTimer);
+      _channelsRefreshTimer = null;
     }
   },
 
