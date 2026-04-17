@@ -124,9 +124,9 @@ export const useSettingsStore = create<SettingsState>()(
           // This restores other settings from localStorage on top of server values.
           await persistApi?.rehydrate();
         } catch {
-          set({ hasHydrated: true });
-          // Keep renderer-persisted settings as a fallback when the main
-          // process store is not reachable.
+          // Settings fetch failed — assume setup was already completed so the user
+          // isn't forced through the wizard every time the gateway is slow/unreachable.
+          set({ hasHydrated: true, settingsLoaded: true, setupComplete: true });
         }
       },
 
