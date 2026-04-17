@@ -145,6 +145,8 @@ function App() {
       useChatStore.getState().startAutoRefresh();
       useAgentsStore.getState().startAutoRefresh();
       useChannelsStore.getState().startAutoRefresh();
+      useCronStore.getState().startAutoRefresh();
+      useSkillsStore.getState().startAutoRefresh();
     };
     doFetch();
   }, [hasHydrated, settingsLoaded]);
