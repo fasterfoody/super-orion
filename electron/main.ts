@@ -2323,8 +2323,8 @@ ipcMain.handle('runtime:check', async () => {
           res.on('end', resolve);
         },
       );
-      req.on('error', () => {});
-      req.on('timeout', () => { req.destroy(); });
+      req.on('error', () => { gatewayRunning = false; resolve(); });
+      req.on('timeout', () => { req.destroy(); gatewayRunning = false; resolve(); });
       req.end();
     });
   } catch {}
@@ -2540,8 +2540,8 @@ ipcMain.handle('runtime:installGateway', async () => {
             res.on('end', resolve);
           },
         );
-        req.on('error', () => {});
-        req.on('timeout', () => { req.destroy(); });
+        req.on('error', () => { gatewayRunning = false; resolve(); });
+        req.on('timeout', () => { req.destroy(); gatewayRunning = false; resolve(); });
         req.end();
       });
     } catch {}
