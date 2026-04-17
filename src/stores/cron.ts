@@ -13,6 +13,8 @@ interface CronState {
   
   // Actions
   fetchJobs: () => Promise<void>;
+  startAutoRefresh: () => void;
+  stopAutoRefresh: () => void;
   createJob: (input: CronJobCreateInput) => Promise<CronJob>;
   updateJob: (id: string, input: CronJobUpdateInput) => Promise<void>;
   deleteJob: (id: string) => Promise<void>;
@@ -21,13 +23,29 @@ interface CronState {
   setJobs: (jobs: CronJob[]) => void;
 }
 
-export const useCronStore = create<CronState>((set) => ({
+let _cronRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+export const useCronStore = create<CronState>((set, get) => ({
   jobs: [],
   loading: false,
   error: null,
   
+  startAutoRefresh: () => {
+    if (_cronRefreshTimer) return;
+    _cronRefreshTimer = setInterval(() => {
+      get().fetchJobs();
+    }, 60_000);
+  },
+
+  stopAutoRefresh: () => {
+    if (_cronRefreshTimer) {
+      clearInterval(_cronRefreshTimer);
+      _cronRefreshTimer = null;
+    }
+  },
+
   fetchJobs: async () => {
-    const currentJobs = useCronStore.getState().jobs;
+    const currentJobs = get().jobs;
     // Only show loading spinner when there's no data yet (stale-while-revalidate).
     if (currentJobs.length === 0) {
       set({ loading: true, error: null });
