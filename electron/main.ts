@@ -45,6 +45,7 @@ const gatewayWsClient = (() => {
   let handshakeDone = false;
   let isConnecting = false;
   let connectResolve: Array<(v: void) => void> = [];
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const GATEWAY_TOKEN = 'clawx-91e9e41c47c7e91d5dc4561598df899a';
 
   function genId() { return ++requestId; }
@@ -53,6 +54,7 @@ const gatewayWsClient = (() => {
     if (ws && ws.readyState === 1 && handshakeDone) return Promise.resolve();
 
     // If already connecting, wait for that connection to complete
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } // Cancel any pending auto-reconnect
     if (isConnecting) {
       return new Promise((resolve) => {
         connectResolve.push(resolve);
@@ -71,7 +73,7 @@ const gatewayWsClient = (() => {
       // Wait for WebSocket to be truly OPEN before considering the connection ready.
       // This fires when the HTTP upgrade completes and the socket can send.
       ws.onopen = () => {
-        // Socket is now OPEN (readyState === 1). Wait for the connect challenge.
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } // Cancel auto-reconnect since we're connected
       };
 
       ws.onmessage = (event: { data: string }) => {
@@ -150,6 +152,13 @@ const gatewayWsClient = (() => {
         // they will retry connect() and get a fresh socket.
         connectResolve.forEach((r) => r());
         connectResolve = [];
+        // Auto-reconnect after 3 seconds
+        if (reconnectTimer) { clearTimeout(reconnectTimer); }
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          log('[WS] Auto-reconnecting...');
+          connect().catch(() => {});
+        }, 3000);
       };
     });
   }
