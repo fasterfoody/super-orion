@@ -20,6 +20,7 @@ import {
   Cpu,
   LayoutDashboard,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useSettingsStore } from '@/stores/settings';
 import { useChatStore } from '@/stores/chat';
@@ -429,9 +430,14 @@ export function Sidebar() {
         variant="destructive"
         onConfirm={async () => {
           if (!sessionToDelete) return;
-          await deleteSession(sessionToDelete.key);
-          if (currentSessionKey === sessionToDelete.key) navigate('/');
-          setSessionToDelete(null);
+          try {
+            await deleteSession(sessionToDelete.key);
+            if (currentSessionKey === sessionToDelete.key) navigate('/');
+          } catch (err) {
+            toast.error('删除会话失败');
+          } finally {
+            setSessionToDelete(null);
+          }
         }}
         onCancel={() => setSessionToDelete(null)}
       />
