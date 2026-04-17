@@ -2092,7 +2092,6 @@ function CompleteContent({ selectedProvider, installedSkills }: CompleteContentP
 
   return (
     <div className="text-center space-y-6">
-      <img src="/celebration.png" alt="庆祝" className="h-16 w-16 mx-auto mb-4 object-contain" />
       <h2 className="text-xl font-semibold">{t('complete.title')}</h2>
       <p className="text-muted-foreground">
         {t('complete.subtitle')}
