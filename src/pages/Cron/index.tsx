@@ -1080,9 +1080,14 @@ export function Cron() {
         variant="destructive"
         onConfirm={async () => {
           if (jobToDelete) {
-            await deleteJob(jobToDelete.id);
-            setJobToDelete(null);
-            toast.success(t('toast.deleted'));
+            try {
+              await deleteJob(jobToDelete.id);
+              toast.success(t('toast.deleted'));
+            } catch (err) {
+              toast.error(t('toast.deleteFailed', { error: String(err) }));
+            } finally {
+              setJobToDelete(null);
+            }
           }
         }}
         onCancel={() => setJobToDelete(null)}
