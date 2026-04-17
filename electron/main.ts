@@ -2476,6 +2476,7 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
       '/usr/bin/openclaw',
       `${homedir()}/.npm-global/bin/openclaw`,
       `${homedir()}/.local/share/npm-global/bin/openclaw`,
+      `${homedir()}/.local/node/bin/openclaw`,
     ];
     for (const p of binPaths) {
       if (existsSync(p)) {
@@ -2511,6 +2512,7 @@ ipcMain.handle('runtime:installGateway', async () => {
       '/usr/bin/openclaw',
       `${homedir()}/.npm-global/bin/openclaw`,
       `${homedir()}/.local/share/npm-global/bin/openclaw`,
+      `${homedir()}/.local/node/bin/openclaw`,
     ];
     const openclawCmd = binPaths.find((p) => existsSync(p)) || 'openclaw';
 
