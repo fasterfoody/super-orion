@@ -777,7 +777,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
                 disabled={isInstalling}
                 className="text-xs"
               >
-                {isInstalling ? 'Installing Node.js...' : `Install v${NODE_VERSION}`}
+                {isInstalling ? 'Installing Node.js...' : 'Install v22.14.0'}
               </Button>
             )}
             {renderStatus(checks.nodejs.status, checks.nodejs.message)}
