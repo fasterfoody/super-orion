@@ -26,6 +26,7 @@ import { useAgentsStore } from './stores/agents';
 import { useCronStore } from './stores/cron';
 import { useSkillsStore } from './stores/skills';
 import { useChannelsStore } from './stores/channels';
+import { useChatStore } from './stores/chat';
 import { applyGatewayTransportPreference } from './lib/api-client';
 
 
@@ -140,6 +141,10 @@ function App() {
       useSkillsStore.getState().fetchSkills().catch(() => {});
       useChannelsStore.getState().fetchChannels().catch(() => {});
       useProviderStore.getState().refreshProviderSnapshot().catch(() => {});
+      // Start auto-refresh for real-time sync
+      useChatStore.getState().startAutoRefresh();
+      useAgentsStore.getState().startAutoRefresh();
+      useChannelsStore.getState().startAutoRefresh();
     };
     doFetch();
   }, [hasHydrated, settingsLoaded]);
