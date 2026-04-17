@@ -250,6 +250,41 @@ export function normalizeProviderApiKeyInput(apiKey: string): string {
   return apiKey.trim();
 }
 
+/** Validate API key format before making an API call (UX improvement). Returns error message or null if format looks OK. */
+export function validateProviderApiKeyFormat(type: ProviderType | string, apiKey: string): string | null {
+  const key = apiKey.trim();
+  if (!key) return null; // Empty handled elsewhere
+
+  switch (type) {
+    case 'openai':
+    case 'openrouter':
+    case 'siliconflow':
+    case 'moonshot': {
+      if (!key.startsWith('sk-')) return 'OpenAI API keys should start with sk-';
+      if (key.length < 20) return 'API key appears too short (min 20 chars)';
+      return null;
+    }
+    case 'anthropic': {
+      if (!key.startsWith('sk-ant-')) return 'Anthropic API keys should start with sk-ant-';
+      if (key.length < 40) return 'API key appears too short (min 40 chars)';
+      return null;
+    }
+    case 'google': {
+      if (!key.startsWith('AIza')) return 'Google API keys should start with AIza';
+      if (key.length < 30) return 'API key appears too short (min 30 chars)';
+      return null;
+    }
+    case 'ark': {
+      if (key.length < 10) return 'API key appears too short (min 10 chars)';
+      return null;
+    }
+    default: {
+      if (key.length < 4) return 'API key appears too short';
+      return null;
+    }
+  }
+}
+
 /** Normalize provider API key before saving; Ollama uses a local placeholder when blank. */
 export function resolveProviderApiKeyForSave(type: ProviderType | string, apiKey: string): string | undefined {
   const trimmed = normalizeProviderApiKeyInput(apiKey);

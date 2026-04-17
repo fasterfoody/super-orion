@@ -135,6 +135,8 @@ export function Setup() {
 
   // Setup state
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  // devBypass: set providerConfigured=true for dev/testing (e.g. ?devBypass=1 in URL)
+  const devBypass = new URLSearchParams(window.location.search).has('devBypass');
   const [providerConfigured, setProviderConfigured] = useState(false);
   const [apiKey, setApiKey] = useState('');
   // Installation state for the Installing step
@@ -160,7 +162,7 @@ export function Setup() {
       case STEP.RUNTIME:
         return runtimeChecksPassed;
       case STEP.PROVIDER:
-        return providerConfigured;
+        return providerConfigured || devBypass;
       case STEP.INSTALLING:
         return false; // Cannot manually proceed, auto-proceeds when done
       case STEP.COMPLETE:
@@ -168,7 +170,7 @@ export function Setup() {
       default:
         return true;
     }
-  }, [safeStepIndex, providerConfigured, runtimeChecksPassed]);
+  }, [safeStepIndex, providerConfigured, runtimeChecksPassed, devBypass]);
 
   const handleNext = async () => {
     if (isLastStep) {
