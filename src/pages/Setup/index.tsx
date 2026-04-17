@@ -342,7 +342,7 @@ function WelcomeContent() {
   return (
     <div data-testid="setup-welcome-step" className="text-center space-y-4">
       <div className="mb-4 flex justify-center">
-        <img src="/orion-logo.jpg" alt="Orion" className="h-16 w-16 object-contain" />
+        <img src="/虾图标.jpg" alt="Orion" className="h-16 w-16 object-contain" />
       </div>
       <h2 className="text-xl font-semibold">{t('welcome.title')}</h2>
       <p className="text-muted-foreground">
