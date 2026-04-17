@@ -161,7 +161,7 @@ export function Setup() {
       case STEP.WELCOME:
         return true;
       case STEP.RUNTIME:
-        return runtimeChecksPassed;
+        return runtimeChecksPassed || devBypass;
       case STEP.PROVIDER:
         return providerConfigured || devBypass;
       case STEP.INSTALLING:
@@ -769,7 +769,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
             )}
           </div>
           <div className="flex items-center gap-2">
-            {checks.nodejs.status === 'error' && (
+            {!isInstalling && (
               <Button
                 variant="outline"
                 size="sm"
@@ -801,7 +801,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
                 disabled={isInstalling}
                 className="text-xs"
               >
-                {isInstalling ? 'Installing OpenClaw...' : 'Install'}
+                {isInstalling ? 'Installing OpenClaw...' : 'Install CLI'}
               </Button>
             )}
             {renderStatus(checks.openclaw.status, checks.openclaw.message)}
@@ -825,7 +825,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
                 disabled={isInstalling}
                 className="text-xs"
               >
-                {isInstalling ? 'Installing Gateway...' : 'Install'}
+                {isInstalling ? 'Installing Gateway...' : 'Install Gateway'}
               </Button>
             )}
             {checks.gateway.status === 'checking' && checks.openclaw.status === 'success' && (
