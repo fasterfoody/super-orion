@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { RefreshCw, Trash2, AlertCircle, Plus } from 'lucide-react';
+import { RefreshCw, Trash2, AlertCircle, Plus, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -301,7 +301,7 @@ export function Channels() {
             </div>
           )}
 
-          {configuredGroups.length > 0 && (
+          {configuredGroups.length > 0 ? (
             <div className="mb-12">
               <h2 className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
                 {t('configured')}
@@ -448,6 +448,14 @@ export function Channels() {
                   </div>
                 ))}
               </div>
+            </div>
+          ) : (
+            <div className="mb-12 flex flex-col items-center justify-center py-16 text-center rounded-3xl border border-dashed border-black/10 dark:border-white/10">
+              <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-4">
+                <Network className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <p className="text-[15px] font-medium text-foreground/70 mb-1">{t('noChannels') || 'No channels configured'}</p>
+              <p className="text-[13px] text-muted-foreground mb-0">{t('noChannelsHint') || 'Add a channel below to get started'}</p>
             </div>
           )}
 
