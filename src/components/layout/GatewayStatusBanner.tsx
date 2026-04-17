@@ -4,7 +4,7 @@
  * Auto-dismisses when connection is restored.
  */
 import { useEffect, useState } from 'react';
-import { AlertCircle, Loader2, WifiOff } from 'lucide-react';
+import { Loader2, WifiOff } from 'lucide-react';
 import { useGatewayStore } from '@/stores/gateway';
 
 export function GatewayStatusBanner() {
