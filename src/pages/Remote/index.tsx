@@ -63,8 +63,12 @@ export function Remote() {
       if (!silent) setOutput(out || `(exit ${result.code})`);
       return out;
     } catch (e) {
-      if (!silent) setOutput(`Error: ${e}`);
-      return `Error: ${e}`;
+      const errorMsg = `Error: ${e}`;
+      if (!silent) {
+        setOutput(errorMsg);
+        toast.error(errorMsg);
+      }
+      return errorMsg;
     } finally {
       if (!silent) setLoading(false);
     }
