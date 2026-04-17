@@ -1985,7 +1985,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
   return (
     <div className="space-y-6">
       <div className="text-center">
-        <img src="/steve-jobs.png" alt="配置" className="h-16 w-16 mx-auto mb-4 object-contain" />
+        <img src="/模仿乔布斯单手摸下巴的动作.png" alt="配置" className="h-16 w-16 mx-auto mb-4 object-contain" />
         <h2 className="text-xl font-semibold mb-2">{t('installing.title')}</h2>
         <p className="text-muted-foreground">
           {t('installing.subtitle')}
