@@ -97,7 +97,13 @@ class GatewayBrowserClient {
     this.gatewayInfo = await hostApiFetch<GatewayInfo>('/api/app/gateway-info');
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.gatewayInfo!.wsUrl);
+      const isRemote = (this.gatewayInfo as GatewayInfo & {isRemote?: boolean})?.isRemote;
+      const headers: Record<string, string> = {};
+      if (isRemote) {
+        // Remote gateway binds to 127.0.0.1, requires this origin
+        headers['Origin'] = 'http://127.0.0.1:18789';
+      }
+      const ws = new WebSocket(this.gatewayInfo!.wsUrl, { headers });
       let resolved = false;
       let challengeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -140,6 +146,7 @@ class GatewayBrowserClient {
               rejectOnce(new Error('Gateway connect.challenge missing nonce'));
               return;
             }
+            const isRemote = (this.gatewayInfo as GatewayInfo & {isRemote?: boolean})?.isRemote;
             const connectFrame = {
               type: 'req',
               id: `connect-${Date.now()}`,
@@ -148,18 +155,21 @@ class GatewayBrowserClient {
                 minProtocol: 3,
                 maxProtocol: 3,
                 client: {
-                  id: 'gateway-client',
+                  id: isRemote ? 'openclaw-control-ui' : 'gateway-client',
                   displayName: '猎户座',
-                  version: '0.1.0',
+                  version: '1.0.0',
                   platform: navigator.platform,
-                  mode: 'ui',
+                  mode: isRemote ? 'webchat' : 'ui',
                 },
-                auth: {
-                  token: this.gatewayInfo?.token,
-                },
+                auth: isRemote ? {} : { token: this.gatewayInfo?.token },
                 caps: [],
                 role: 'operator',
-                scopes: ['operator.admin'],
+                scopes: isRemote
+                  ? ['operator.admin', 'operator.read', 'operator.write']
+                  : ['operator.admin'],
+                caps: isRemote ? ['tool-events'] : [],
+                userAgent: '猎户座/1.0',
+                locale: 'zh-CN',
               },
             };
             ws.send(JSON.stringify(connectFrame));
