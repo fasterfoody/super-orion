@@ -6,12 +6,58 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { join } from 'path';
 import { homedir } from 'os';
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { existsSync, appendFileSync, readFileSync, writeFileSync } from 'fs';
 import { execSync } from 'child_process';
 
 let mainWindow: BrowserWindow | null = null;
 const log = (msg: string) => appendFileSync('/tmp/orion-main.log', `${new Date().toISOString()} ${msg}\n`);
+
+// ── Remote Gateway SSH Tunnel ────────────────────────────────────────────────
+const REMOTE_HOST = '192.168.5.163';
+const REMOTE_USER = 'erbro001';
+const REMOTE_GW_PORT = 18789;
+const LOCAL_TUNNEL_PORT = 18799;
+
+let remoteTunnel: ChildProcess | null = null;
+let tunnelReady = false;
+
+function startRemoteTunnel(): Promise<void> {
+  return new Promise((resolve) => {
+    if (remoteTunnel) { resolve(); return; }
+    const keyPath = join(homedir(), '.ssh', 'id_ed25519');
+    // ssh -N: don't execute remote command, just forward
+    // -L: local_port:host:remote_port
+    remoteTunnel = spawn('ssh', [
+      '-N', '-T',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'BatchMode=yes',
+      '-i', keyPath,
+      '-L', `${LOCAL_TUNNEL_PORT}:localhost:${REMOTE_GW_PORT}`,
+      `${REMOTE_USER}@${REMOTE_HOST}`,
+    ]);
+    remoteTunnel.on('error', (err) => {
+      log(`[tunnel] error: ${err.message}`);
+      remoteTunnel = null;
+      tunnelReady = false;
+    });
+    remoteTunnel.on('close', () => {
+      log('[tunnel] closed');
+      remoteTunnel = null;
+      tunnelReady = false;
+    });
+    // Give SSH a moment to establish
+    setTimeout(() => { tunnelReady = true; resolve(); }, 3000);
+  });
+}
+
+function stopRemoteTunnel() {
+  if (remoteTunnel) {
+    remoteTunnel.kill();
+    remoteTunnel = null;
+    tunnelReady = false;
+  }
+}
 
 // Orion settings file (separate from OpenClaw config)
 const getOrionSettingsPath = () => join(app.getPath('userData'), 'orion-settings.json');
@@ -45,8 +91,7 @@ const gatewayWsClient = (() => {
   let handshakeDone = false;
   let isConnecting = false;
   let connectResolve: Array<(v: void) => void> = [];
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  const GATEWAY_TOKEN = ((readOpenClawConfig().gateway as Record<string, unknown>)?.auth as Record<string, string>)?.token || 'clawx-91e9e41c47c7e91d5dc4561598df899a';
+  const GATEWAY_TOKEN = 'clawx-91e9e41c47c7e91d5dc4561598df899a';
 
   function genId() { return ++requestId; }
 
@@ -54,7 +99,6 @@ const gatewayWsClient = (() => {
     if (ws && ws.readyState === 1 && handshakeDone) return Promise.resolve();
 
     // If already connecting, wait for that connection to complete
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } // Cancel any pending auto-reconnect
     if (isConnecting) {
       return new Promise((resolve) => {
         connectResolve.push(resolve);
@@ -73,7 +117,7 @@ const gatewayWsClient = (() => {
       // Wait for WebSocket to be truly OPEN before considering the connection ready.
       // This fires when the HTTP upgrade completes and the socket can send.
       ws.onopen = () => {
-        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } // Cancel auto-reconnect since we're connected
+        // Socket is now OPEN (readyState === 1). Wait for the connect challenge.
       };
 
       ws.onmessage = (event: { data: string }) => {
@@ -152,13 +196,6 @@ const gatewayWsClient = (() => {
         // they will retry connect() and get a fresh socket.
         connectResolve.forEach((r) => r());
         connectResolve = [];
-        // Auto-reconnect after 3 seconds
-        if (reconnectTimer) { clearTimeout(reconnectTimer); }
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          log('[WS] Auto-reconnecting...');
-          connect().catch(() => {});
-        }, 3000);
       };
     });
   }
@@ -1445,14 +1482,20 @@ ipcMain.handle('hostapi:fetch', async (_, request: {
 
     // ── App / Gateway info ────────────────────────────────────────────────────
     // GET /api/app/gateway-info → return gateway URL, token, port
+    // Orion UI runs ON the remote machine, connecting to its local gateway.
+    // Remote gateway at 5.163 binds to 127.0.0.1:18789 with --auth none.
     if (path === '/api/app/gateway-info' && method === 'GET') {
-      const cfg = readOpenClawConfig();
-      const gwToken = ((cfg.gateway as Record<string, unknown>)?.auth as Record<string, string>)?.token || '89064df8b54ad85a7f1728be9417a13eee25de73121a9b15';
       return {
         ok: true,
         data: {
           status: 200,
-          json: { success: true, url: 'http://127.0.0.1:18789', token: gwToken, port: 18789 },
+          json: {
+            success: true,
+            url: 'http://127.0.0.1:18789',
+            token: '',
+            port: 18789,
+            isRemote: true,
+          },
         },
         success: true,
       };
@@ -1675,10 +1718,8 @@ ipcMain.handle('hostapi:fetch', async (_, request: {
 });
 
 ipcMain.handle('hostapi:token', () => {
-  // Return the gateway auth token from openclaw.json
-  const config = readOpenClawConfig();
-  const token = ((config.gateway as Record<string, unknown>)?.auth as Record<string, string>)?.token;
-  return token || '89064df8b54ad85a7f1728be9417a13eee25de73121a9b15';
+  // Return the gateway auth token for API calls
+  return '89064df8b54ad85a7f1728be9417a13eee25de73121a9b15';
 });
 
 async function gatewayStatus(): Promise<{ ok: boolean; data?: unknown; error?: unknown; success: boolean }> {
@@ -2307,8 +2348,8 @@ ipcMain.handle('runtime:check', async () => {
   const nodeVersion = await getNodeVersion();
   const pm = await detectPackageManager();
 
-  // Check openclaw CLI (including ~/.local/node/bin where we install it)
-  const openclawExists = existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`) || existsSync(`${homedir()}/.local/node/bin/openclaw`);
+  // Check openclaw CLI
+  const openclawExists = existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`);
   let openclawVersion: string | null = null;
   if (openclawExists) {
     try {
@@ -2432,25 +2473,11 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
   };
 
   try {
-    // Check if already installed (including ~/.local/node/bin where we install it)
-    const openclawPaths = [
-      '/usr/bin/openclaw',
-      `${homedir()}/.npm-global/bin/openclaw`,
-      `${homedir()}/.local/node/bin/openclaw`,
-    ];
-    const existingOpenClaw = openclawPaths.find((p) => existsSync(p));
-    if (existingOpenClaw) {
+    // Check if already installed
+    const paths = ['/usr/bin/openclaw', `${homedir()}/.npm-global/bin/openclaw`];
+    if (paths.some((p) => existsSync(p))) {
       onProgress('OpenClaw CLI already installed');
-      // Get version
-      try {
-        const child = spawn(existingOpenClaw, ['--version'], { shell: true, timeout: 5000 });
-        let verOut = '';
-        child.stdout.on('data', (d) => { verOut += d.toString(); });
-        await new Promise<void>((res) => { child.on('close', () => res()); });
-        return { success: true, version: verOut.trim() || undefined };
-      } catch {
-        return { success: true };
-      }
+      return { success: true };
     }
 
     const pm = await detectPackageManager();
@@ -2460,14 +2487,10 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
 
     onProgress(`Installing OpenClaw CLI via ${pm}...`);
 
-    // Use npm from ~/.local/node if available (Node 22), otherwise system npm
-    const localNpm = `${homedir()}/.local/node/bin/npm`;
-    const npmCmd = existsSync(localNpm) ? localNpm : pm;
-
     // Install globally with the detected package manager
     const installCmd = pm === 'bun'
       ? 'bun add -g openclaw'
-      : `${npmCmd} install -g openclaw`;
+      : `${pm} install -g openclaw`;
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn(installCmd, [], {
@@ -2489,7 +2512,6 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
       '/usr/bin/openclaw',
       `${homedir()}/.npm-global/bin/openclaw`,
       `${homedir()}/.local/share/npm-global/bin/openclaw`,
-      `${homedir()}/.local/node/bin/openclaw`,
     ];
     for (const p of binPaths) {
       if (existsSync(p)) {
@@ -2525,7 +2547,6 @@ ipcMain.handle('runtime:installGateway', async () => {
       '/usr/bin/openclaw',
       `${homedir()}/.npm-global/bin/openclaw`,
       `${homedir()}/.local/share/npm-global/bin/openclaw`,
-      `${homedir()}/.local/node/bin/openclaw`,
     ];
     const openclawCmd = binPaths.find((p) => existsSync(p)) || 'openclaw';
 
@@ -2605,6 +2626,33 @@ ipcMain.handle('dialog:open', async (_, options: { filters?: { name: string; ext
 // Session delete → no-op (read-only UI)
 ipcMain.handle('session:delete', async () => {
   return { success: true };
+});
+
+// Fetch sessions from a remote gateway via SSH
+ipcMain.handle('sessions:remote', async (_, host: string, user: string) => {
+  return new Promise((resolve) => {
+    const keyPath = join(homedir(), '.ssh', 'id_ed25519');
+    const cmd = `openclaw sessions --all-agents --json 2>/dev/null`;
+    const sshCmd = `ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i "${keyPath}" ${user}@${host} ${JSON.stringify(cmd)}`;
+    const proc = spawn('sh', ['-c', sshCmd], { timeout: 30000 });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('close', (code) => {
+      if (code === 0 && stdout.includes('sessions')) {
+        try {
+          const data = JSON.parse(stdout);
+          resolve({ ok: true, sessions: data.sessions || [], stores: data.stores || [] });
+        } catch (e) {
+          resolve({ ok: false, error: 'parse error: ' + stdout.substring(0, 200) });
+        }
+      } else {
+        resolve({ ok: false, error: stderr.substring(0, 200) || `exit code ${code}` });
+      }
+    });
+    proc.on('error', (err) => resolve({ ok: false, error: err.message }));
+  });
 });
 
 // Settings setMany → no-op (read-only UI)
@@ -2712,40 +2760,21 @@ ipcMain.handle('uv:install-all', async () => {
     // Step 1: Check if OpenClaw CLI is installed
     progress(1, TOTAL_STEPS, 'Checking OpenClaw installation...');
     log('Checking OpenClaw installation...');
-    // Check multiple possible locations including ~/.local/node/bin
-    const openclawPaths = [
-      `${homedir()}/.local/node/bin/openclaw`,
-      '/usr/bin/openclaw',
-      `${homedir()}/.npm-global/bin/openclaw`,
-    ];
-    let openclawInstalled = openclawPaths.some((p) => {
-      try {
-        execSync(`test -f "${p}" && test -x "${p}"`, { encoding: 'utf8', timeout: 5000 });
-        log(`OpenClaw CLI found at ${p}`);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    if (!openclawInstalled) {
-      try {
-        execSync('which openclaw', { encoding: 'utf8', timeout: 5000 });
-        openclawInstalled = true;
-        log('OpenClaw CLI found in PATH');
-      } catch {
-        log('OpenClaw CLI not found, will install via npm');
-      }
+    let openclawInstalled = false;
+    try {
+      execSync('which openclaw', { encoding: 'utf8', timeout: 5000 });
+      openclawInstalled = true;
+      log('OpenClaw CLI found');
+    } catch {
+      log('OpenClaw CLI not found, will install via npm');
     }
 
     // Step 2: Install OpenClaw if not present
     if (!openclawInstalled) {
       progress(2, TOTAL_STEPS, 'Installing OpenClaw via npm...');
       log('Installing OpenClaw via npm...');
-      // Use Node 22 npm if available, otherwise system npm
-      const localNpm = `${homedir()}/.local/node/bin/npm`;
-      const npmBin = require('fs').existsSync(localNpm) ? localNpm : 'npm';
       try {
-        execSync(`${npmBin} install -g openclaw`, {
+        execSync('npm install -g openclaw', {
           encoding: 'utf8',
           timeout: 120000,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -2759,17 +2788,10 @@ ipcMain.handle('uv:install-all', async () => {
       }
     }
 
-    // Build env with correct PATH (Node 22 first)
-    const localNodeBin = `${homedir()}/.local/node/bin`;
-    const correctEnv = {
-      ...process.env,
-      PATH: `${localNodeBin}:${process.env.PATH || '/usr/bin:/bin'}`,
-    };
-
     // Step 3: Verify openclaw CLI works
     progress(3, TOTAL_STEPS, 'Verifying OpenClaw CLI...');
     try {
-      const version = execSync('openclaw --version', { encoding: 'utf8', timeout: 10000, env: correctEnv }).trim();
+      const version = execSync('openclaw --version', { encoding: 'utf8', timeout: 10000 }).trim();
       log(`OpenClaw version: ${version}`);
     } catch (e: unknown) {
       const emsg = e instanceof Error ? e.message : String(e);
@@ -2782,7 +2804,7 @@ ipcMain.handle('uv:install-all', async () => {
     log('Checking gateway service status...');
     let serviceInstalled = false;
     try {
-      const status = execSync('openclaw daemon status', { encoding: 'utf8', timeout: 15000, env: correctEnv });
+      const status = execSync('openclaw daemon status', { encoding: 'utf8', timeout: 15000 });
       serviceInstalled = status.includes('installed') || status.includes('running') || status.includes('active');
       log(`Gateway service status: ${status.substring(0, 100)}`);
     } catch {
@@ -2795,13 +2817,13 @@ ipcMain.handle('uv:install-all', async () => {
       log('Installing gateway service...');
       try {
         // Try to install as system service (may need sudo)
-        execSync('openclaw daemon install', { encoding: 'utf8', timeout: 60000, env: correctEnv });
+        execSync('openclaw daemon install', { encoding: 'utf8', timeout: 60000 });
         log('Gateway service installed');
       } catch (e) {
         // Fallback: try user-level service
         log('System install failed, trying user-level...');
         try {
-          execSync('openclaw daemon install --user', { encoding: 'utf8', timeout: 60000, env: correctEnv });
+          execSync('openclaw daemon install --user', { encoding: 'utf8', timeout: 60000 });
           log('Gateway service installed (user level)');
         } catch (e2: unknown) {
           const e2msg = e2 instanceof Error ? e2.message : String(e2);
@@ -2815,7 +2837,7 @@ ipcMain.handle('uv:install-all', async () => {
     progress(6, TOTAL_STEPS, 'Starting gateway service...');
     log('Starting gateway service...');
     try {
-      execSync('openclaw daemon start', { encoding: 'utf8', timeout: 30000, env: correctEnv });
+      execSync('openclaw daemon start', { encoding: 'utf8', timeout: 30000 });
       log('Gateway started');
     } catch (e: unknown) {
       const emsg = e instanceof Error ? e.message : String(e);
