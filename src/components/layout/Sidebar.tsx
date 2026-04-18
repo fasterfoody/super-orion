@@ -19,14 +19,13 @@ import {
   Trash2,
   Cpu,
   LayoutDashboard,
+  MessagesSquare,
 } from 'lucide-react';
-import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useSettingsStore } from '@/stores/settings';
 import { useChatStore } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
-import { useChannelsStore } from '@/stores/channels';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -141,16 +140,9 @@ export function Sidebar() {
       await loadSessions();
       if (cancelled) return;
       await loadHistory(hasExistingMessages);
-      // Start auto-refresh for real-time sync
-      useChatStore.getState().startAutoRefresh();
-      useAgentsStore.getState().startAutoRefresh();
-      useChannelsStore.getState().startAutoRefresh();
     })();
     return () => {
       cancelled = true;
-      useChatStore.getState().stopAutoRefresh();
-      useAgentsStore.getState().stopAutoRefresh();
-      useChannelsStore.getState().stopAutoRefresh();
     };
   }, [isGatewayRunning, loadHistory, loadSessions]);
   const agents = useAgentsStore((s) => s.agents);
@@ -224,6 +216,7 @@ export function Sidebar() {
     { to: '/chat', icon: <Bot className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.chat') || 'Chat', testId: 'sidebar-nav-chat' },
     { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
     { to: '/agents', icon: <Bot className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.agents'), testId: 'sidebar-nav-agents' },
+    { to: '/sessions', icon: <MessagesSquare className="h-[18px] w-[18px]" strokeWidth={2} />, label: '所有会话', testId: 'sidebar-nav-sessions' },
     { to: '/remote', icon: <Terminal className="h-[18px] w-[18px]" strokeWidth={2} />, label: 'Remote', testId: 'sidebar-nav-remote' },
     { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
@@ -430,14 +423,9 @@ export function Sidebar() {
         variant="destructive"
         onConfirm={async () => {
           if (!sessionToDelete) return;
-          try {
-            await deleteSession(sessionToDelete.key);
-            if (currentSessionKey === sessionToDelete.key) navigate('/');
-          } catch (err) {
-            toast.error('删除会话失败');
-          } finally {
-            setSessionToDelete(null);
-          }
+          await deleteSession(sessionToDelete.key);
+          if (currentSessionKey === sessionToDelete.key) navigate('/');
+          setSessionToDelete(null);
         }}
         onCancel={() => setSessionToDelete(null)}
       />

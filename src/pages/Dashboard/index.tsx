@@ -164,7 +164,7 @@ export default function Dashboard() {
           <button className="flex flex-col items-center gap-1 p-4 rounded-lg border hover:bg-muted/50 transition-colors text-sm" onClick={() => navigate('/agents')}><span className="text-lg">👥</span><span>Agents</span></button>
           <button className="flex flex-col items-center gap-1 p-4 rounded-lg border hover:bg-muted/50 transition-colors text-sm" onClick={() => navigate('/channels')}><span className="text-lg">📡</span><span>Channels</span></button>
           <button className="flex flex-col items-center gap-1 p-4 rounded-lg border hover:bg-muted/50 transition-colors text-sm" onClick={() => navigate('/remote')}><span className="text-lg">🖥️</span><span>Remote</span></button>
-          <button className="flex flex-col items-center gap-1 p-4 rounded-lg border hover:bg-muted/50 transition-colors text-sm" onClick={() => navigate('/settings')}><span className="text-lg">⚙️</span><span>Settings</span></button>
+          <button className="flex flex-col items-center gap-1 p-4 rounded-lg border hover:bg-muted/50 transition-colors text-sm" onClick={() => navigate('/sessions')}><span className="text-lg">💬</span><span>所有会话</span></button>
           <button className="flex flex-col items-center gap-1 p-4 rounded-lg border hover:bg-muted/50 transition-colors text-sm" onClick={() => navigate('/cron')}><span className="text-lg"><Clock className="w-5 h-5" /></span><span>Cron</span></button>
         </div>
       </div>

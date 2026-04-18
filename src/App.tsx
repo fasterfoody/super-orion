@@ -19,6 +19,7 @@ import { Settings } from './pages/Settings';
 import { Setup } from './pages/Setup';
 import { Remote } from './pages/Remote';
 import Dashboard from './pages/Dashboard';
+import Sessions from './pages/Sessions';
 import { useSettingsStore } from './stores/settings';
 import { useGatewayStore } from './stores/gateway';
 import { useProviderStore } from './stores/providers';
@@ -26,7 +27,6 @@ import { useAgentsStore } from './stores/agents';
 import { useCronStore } from './stores/cron';
 import { useSkillsStore } from './stores/skills';
 import { useChannelsStore } from './stores/channels';
-import { useChatStore } from './stores/chat';
 import { applyGatewayTransportPreference } from './lib/api-client';
 
 
@@ -141,12 +141,6 @@ function App() {
       useSkillsStore.getState().fetchSkills().catch(() => {});
       useChannelsStore.getState().fetchChannels().catch(() => {});
       useProviderStore.getState().refreshProviderSnapshot().catch(() => {});
-      // Start auto-refresh for real-time sync
-      useChatStore.getState().startAutoRefresh();
-      useAgentsStore.getState().startAutoRefresh();
-      useChannelsStore.getState().startAutoRefresh();
-      useCronStore.getState().startAutoRefresh();
-      useSkillsStore.getState().startAutoRefresh();
     };
     doFetch();
   }, [hasHydrated, settingsLoaded]);
@@ -229,6 +223,7 @@ function App() {
             <Route path="/skills" element={<Skills />} />
             <Route path="/cron" element={<Cron />} />
             <Route path="/remote" element={<Remote />} />
+            <Route path="/sessions" element={<Sessions />} />
             <Route path="/settings/*" element={<Settings />} />
           </Route>
         </Routes>
