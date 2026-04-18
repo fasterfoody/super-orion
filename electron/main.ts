@@ -22,6 +22,14 @@ const LOCAL_TUNNEL_PORT = 18799;
 let remoteTunnel: ChildProcess | null = null;
 let tunnelReady = false;
 
+// Bundled openclaw path (extracted from asarUnpack)
+const BUNDLED_OPENCLAW = join(
+  process.resourcesPath || '',
+  'app.asar.unpacked',
+  'bundle-openclaw',
+  'openclaw.mjs'
+);
+
 function startRemoteTunnel(): Promise<void> {
   return new Promise((resolve) => {
     if (remoteTunnel) { resolve(); return; }
@@ -2535,48 +2543,59 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
   }
 });
 
-// runtime:installGateway — install and start gateway service
+// runtime:installGateway — start bundled gateway as detached daemon
 ipcMain.handle('runtime:installGateway', async () => {
   const onProgress = (msg: string) => {
     mainWindow?.webContents?.send('runtime:progress', { phase: 'gateway', message: msg });
   };
 
   try {
-    // Find openclaw binary
-    const binPaths = [
-      '/usr/bin/openclaw',
-      `${homedir()}/.npm-global/bin/openclaw`,
-      `${homedir()}/.local/share/npm-global/bin/openclaw`,
-    ];
-    const openclawCmd = binPaths.find((p) => existsSync(p)) || 'openclaw';
+    const configPath = join(homedir(), '.openclaw', 'openclaw.json');
+    const gwConfig = {
+      gateway: {
+        auth: { mode: 'none' },
+        controlUi: { dangerouslyDisableDeviceAuth: true },
+      },
+    };
 
-    onProgress('Installing gateway service...');
-
-    // Run: openclaw gateway install
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(openclawCmd, ['gateway', 'install'], { shell: true });
-      let stderr = '';
-      child.stderr.on('data', (d) => { stderr += d.toString(); });
-      child.on('close', (code) => {
-        if (code === 0 || stderr.includes('already')) resolve();
-        else reject(new Error(`gateway install failed: ${stderr || code}`));
-      });
-      child.on('error', reject);
-    });
+    // Write gateway config
+    onProgress('Writing gateway config...');
+    try {
+      const configDir = join(homedir(), '.openclaw');
+      if (!existsSync(configDir)) {
+        spawn('mkdir', ['-p', configDir]);
+      }
+      writeFileSync(configPath, JSON.stringify(gwConfig, null, 2));
+    } catch (e) {
+      // Config write failure is non-fatal
+    }
 
     onProgress('Starting gateway...');
 
-    // Run: openclaw gateway start
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(openclawCmd, ['gateway', 'start'], { shell: true });
-      let stderr = '';
-      child.stderr.on('data', (d) => { stderr += d.toString(); });
-      child.on('close', (code) => {
-        if (code === 0 || stderr.includes('already running') || stderr.includes('started')) resolve();
-        else reject(new Error(`gateway start failed: ${stderr || code}`));
-      });
-      child.on('error', reject);
+    // Kill any existing gateway on port 18789
+    try {
+      const killCmd = `lsof -ti:18789 | xargs kill -9 2>/dev/null; pkill -9 -f "gateway.*18789" 2>/dev/null; true`;
+      spawn('sh', ['-c', killCmd], { detached: true, stdio: 'ignore' }).unref();
+    } catch {}
+
+    await new Promise((r) => setTimeout(r, 1000));
+
+    // Start bundled gateway as detached daemon (survives parent exit)
+    const bundleExists = existsSync(BUNDLED_OPENCLAW);
+    const openclawCmd = bundleExists ? 'node' : 'openclaw';
+    const binPath = bundleExists ? BUNDLED_OPENCLAW : 'openclaw';
+
+    const startArgs = bundleExists
+      ? [binPath, 'gateway', 'run', '--port', '18789', '--auth', 'none', '--allow-unconfigured']
+      : [binPath, 'gateway', 'start'];
+
+    // Use setsid to create new process group (proper daemon)
+    const child = spawn('sh', ['-c', `setsid ${openclawCmd} ${startArgs.slice(1).join(' ')} > /dev/null 2>&1 &`], {
+      detached: true,
+      stdio: 'ignore',
+      shell: true,
     });
+    child.unref();
 
     // Wait a moment for gateway to initialize
     await new Promise((r) => setTimeout(r, 3000));

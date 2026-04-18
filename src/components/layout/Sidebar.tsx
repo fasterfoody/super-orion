@@ -32,7 +32,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { hostApiFetch } from '@/lib/host-api';
 import { useTranslation } from 'react-i18next';
-import logoSvg from '@/assets/diyibu.jpg';
+import logoSvg from '@/assets/logo.svg';
 
 type SessionBucketKey =
   | 'today'
