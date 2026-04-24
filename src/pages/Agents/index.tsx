@@ -327,9 +327,11 @@ function AgentCard({
         return `${channelName} · ${accountLabel}`;
       }),
   );
-  const channelsText = boundChannelAccounts.length > 0
-    ? boundChannelAccounts.join(', ')
-    : t('none');
+  const sharedChannels = (agent.channelTypes || [])
+    .filter((ch) => !boundChannelAccounts.some((b) => b.startsWith(CHANNEL_NAMES[ch as ChannelType] || ch)))
+    .map((ch) => `${CHANNEL_NAMES[ch as ChannelType] || ch} · 共享`);
+  const allChannels = [...boundChannelAccounts, ...sharedChannels];
+  const channelsText = allChannels.length > 0 ? allChannels.join(', ') : t('none');
 
   return (
     <div
@@ -660,7 +662,22 @@ function AgentSettingsModal({
               </div>
             ) : (
               <div className="space-y-3">
-                {assignedChannels.map((channel) => (
+                {assignedChannels.length === 0
+                  ? agent.channelTypes.map((ch) => (
+                      <div key={ch} className="flex items-center justify-between rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-4">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="h-[40px] w-[40px] shrink-0 flex items-center justify-center text-foreground bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-full shadow-sm">
+                            <ChannelLogo type={ch} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[15px] font-semibold text-foreground">{CHANNEL_NAMES[ch as ChannelType] || ch}</p>
+                            <p className="text-[13.5px] text-muted-foreground">共享频道 · {t('settingsDialog.mainAccount')}</p>
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-xs text-muted-foreground">共享</div>
+                      </div>
+                    ))
+                  : assignedChannels.map((channel) => (
                   <div key={`${channel.channelType}-${channel.accountId}`} className="flex items-center justify-between rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-4">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="h-[40px] w-[40px] shrink-0 flex items-center justify-center text-foreground bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-full shadow-sm">
@@ -679,11 +696,6 @@ function AgentSettingsModal({
                     <div className="shrink-0" />
                   </div>
                 ))}
-                {assignedChannels.length === 0 && agent.channelTypes.length > 0 && (
-                  <div className="rounded-2xl border border-dashed border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 p-4 text-[13.5px] text-muted-foreground">
-                    {t('settingsDialog.channelsManagedInChannels')}
-                  </div>
-                )}
               </div>
             )}
           </div>

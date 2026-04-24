@@ -99,7 +99,7 @@ const gatewayWsClient = (() => {
   let handshakeDone = false;
   let isConnecting = false;
   let connectResolve: Array<(v: void) => void> = [];
-  const GATEWAY_TOKEN = 'clawx-91e9e41c47c7e91d5dc4561598df899a';
+  const GATEWAY_TOKEN = (() => { try { const c=JSON.parse(readFileSync(join(homedir(),'.openclaw','openclaw.json'),'utf8')); return String(c.gateway?.auth?.token || ''); } catch { return ''; } })() || 'ff2197888c4dd2b1a74bae8df19b79a37f116e8289a77ea6';
 
   function genId() { return ++requestId; }
 
@@ -1918,22 +1918,89 @@ async function buildAgentsSnapshot(): Promise<Record<string, unknown>> {
       if (info?.accountId) channelAccountOwners[`${ct}:${info.accountId}`] = '';
     }
   } catch {}
-  // Transform gateway agents to AgentSummary format
-  const agents = (result?.agents || []).map((a) => {
+  // Build agent → agentDir mapping from openclaw.json
+  const OC_HOME = join(homedir(), '.openclaw');
+  let agentDirMap: Record<string, string> = {};
+  try {
+    const cfg = JSON.parse(readFileSync(join(OC_HOME, 'openclaw.json'), 'utf8'));
+    for (const ag of (cfg.agents?.list || [])) {
+      if (ag.id && ag.agentDir) agentDirMap[ag.id] = ag.agentDir;
+    }
+  } catch {}
+
+  // Enrich each agent with filesystem data (models.json, sessions, skills)
+  const agents = await Promise.all((result?.agents || []).map(async (a) => {
     const primaryModel = a.model?.primary || '';
+    const modelParts = primaryModel.split('/');
+    const provider = modelParts[0] || '';
+    const modelId = modelParts.pop() || primaryModel;
+    // All agents share the system feishu bot if feishu is running — include it for every agent
     const agentChannels = Object.entries(channelOwners).filter(([, agId]) => agId === a.id).map(([ch]) => ch);
+    if (configuredChannelTypes.includes('feishu') && !agentChannels.includes('feishu')) {
+      agentChannels.push('feishu');
+    }
+
+    // Resolve agentDir: use explicit agentDir from config, or derive from OC_HOME
+    const explicitDir = agentDirMap[a.id || ''];
+    const agentHome = explicitDir || (a.id ? join(OC_HOME, 'agents', a.id) : OC_HOME);
+    const agentDir = join(agentHome, 'agent');
+
+    // Read models.json for richer model info (parallel reads)
+    const workspaceDir = a.workspace || join(agentHome, 'workspace');
+    const [modelsJson, sessionsFiles, skillDirs, nodeJson] = await Promise.all([
+      (async () => {
+        try { return JSON.parse(readFileSync(join(agentDir, 'models.json'), 'utf8')); }
+        catch { return null; }
+      })(),
+      (async () => {
+        try { const files = await import('fs/promises').then(m => m.readdir(join(agentHome, 'sessions')).catch(() => [])); return files.filter((f: string) => !f.endsWith('.lock') && !f.includes('.checkpoint')); }
+        catch { return []; }
+      })(),
+      (async () => {
+        try { const dirs = await import('fs/promises').then(m => m.readdir(join(workspaceDir, 'skills')).catch(() => [])); return dirs; }
+        catch { return []; }
+      })(),
+      (async () => {
+        try { return JSON.parse(readFileSync(join(agentDir, 'node.json'), 'utf8')); }
+        catch { return null; }
+      })(),
+    ]);
+
+    // Extract provider + modelId from models.json if available
+    let enrichedProvider = provider;
+    let enrichedModelId = modelId;
+    if (modelsJson?.providers) {
+      const providers = Object.keys(modelsJson.providers);
+      if (providers.length > 0) {
+        enrichedProvider = providers[0];
+        const firstProviderModels = modelsJson.providers[providers[0]]?.models || [];
+        if (firstProviderModels.length > 0) {
+          enrichedModelId = firstProviderModels[0].id || enrichedModelId;
+        }
+      }
+    }
+
     return {
       id: a.id || '', name: a.name || '',
       isDefault: a.id === result?.defaultId,
-      modelDisplay: primaryModel.split('/').pop() || primaryModel || '-',
+      modelDisplay: enrichedModelId || '-',
       modelRef: primaryModel || null,
       overrideModelRef: null,
       inheritedModel: false,
       workspace: a.workspace || '',
-      agentDir: '', mainSessionKey: '',
+      agentDir,
+      mainSessionKey: '',
       channelTypes: agentChannels,
+      // Enriched fields
+      provider: enrichedProvider,
+      modelId: enrichedModelId,
+      sessionCount: sessionsFiles.length,
+      skillCount: skillDirs.length,
+      skills: skillDirs.filter(Boolean) as string[],
+      tools: (nodeJson?.tools as string[] | undefined) || [],
+      remoteNodeIp: (nodeJson?.remoteNodeIp as string | undefined) || '',
     };
-  });
+  }));
   return {
     agents,
     defaultAgentId: result?.defaultId || 'main',
@@ -2274,6 +2341,94 @@ ipcMain.handle('gateway:rpc', async (_, method: string, params?: unknown) => {
   }
 });
 
+// agents:list-all — query all independent agent gateways in parallel and aggregate results
+ipcMain.handle('agents:list-all', async () => {
+  // Map of port -> {token, label}
+  // port 18789 = main gateway (also serves xiaosage/xiaoliu/caiyun who have no own gateway)
+  // port 18790 = jintao, 18797 = yangge, 18800 = liufei
+  const gateways = [
+    { port: 18789, token: 'b7b986e9b7d87e164dd3d4908939edd2a1337fcdf472e68d', label: 'main' },
+    { port: 18790, token: 'ff2197888c4dd2b1a74bae8df19b79a37f116e8289a77ea6', label: 'jintao' },
+    { port: 18797, token: 'e1fe1df88957e0c3bfb122c9ab0eb49da3fa4b4db435ec96', label: 'yangge' },
+    { port: 18800, token: 'ff2197888c4dd2b1a74bae8df19b79a37f116e8289a77ea6', label: 'liufei' },
+  ];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // Gateway assigns its own request IDs regardless of what we send.
+  // Use a state-machine that ignores request ID matching and relies on message type sequencing.
+  type State = 'connecting' | 'authenticating' | 'querying' | 'done';
+  function queryGateway(port: number, token: string, label: string): Promise<any[]> {
+    return new Promise((resolve) => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let ws: any = null;
+        let done = false;
+        let state: State = 'connecting';
+
+        const cleanup = () => { try { ws?.close(); } catch {} };
+        const timer = setTimeout(() => { if (!done) { done = true; cleanup(); resolve([]); } }, 6000);
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ws = new globalThis.WebSocket(`ws://127.0.0.1:${port}`, { headers: { 'Origin': 'http://127.0.0.1:18789' } } as any) as any;
+
+        ws.onmessage = (event: { data: string }) => {
+          if (done) return;
+          try {
+            const msg = JSON.parse(event.data.toString());
+
+            // State: waiting for connect.challenge
+            if (state === 'connecting' && msg.type === 'event' && msg.event === 'connect.challenge') {
+              state = 'authenticating';
+              ws.send(JSON.stringify({
+                type: 'req', id: '999', method: 'connect', params: {
+                  minProtocol: 3, maxProtocol: 3,
+                  client: { id: 'openclaw-control-ui', displayName: '猎户座', version: '1.0', platform: 'linux', mode: 'webchat' },
+                  role: 'operator',
+                  scopes: ['operator.read', 'operator.write', 'operator.admin'],
+                  auth: { token },
+                },
+              }));
+              return;
+            }
+
+            // State: waiting for connect response
+            if (state === 'authenticating' && msg.type === 'res' && msg.ok) {
+              state = 'querying';
+              ws.send(JSON.stringify({ type: 'req', id: '888', method: 'agents.list', params: {} }));
+              return;
+            }
+
+            // State: waiting for agents.list response — any res with agents payload ends the query
+            if (state === 'querying' && msg.type === 'res' && Array.isArray(msg.payload?.agents)) {
+              done = true; clearTimeout(timer); cleanup();
+              resolve(msg.payload.agents.map((a: { id?: string }) => ({ ...a, _gatewayLabel: label, _gatewayPort: port })));
+            }
+          } catch { clearTimeout(timer); cleanup(); resolve([]); }
+        };
+
+        ws.onerror = () => { if (!done) { done = true; clearTimeout(timer); cleanup(); resolve([]); } };
+        ws.onclose = () => { if (!done) { done = true; clearTimeout(timer); resolve([]); } };
+      } catch { resolve([]); }
+    });
+  }
+
+  const results = await Promise.all(gateways.map(g => queryGateway(g.port, g.token, g.label)));
+  const allAgents = results.flat();
+  return allAgents;
+});
+
+// Shell: run arbitrary command (for cleanup etc)
+ipcMain.handle('shell:exec', async (_, cmd: string) => {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, [], { shell: true });
+    let stdout = '', stderr = '';
+    child.stdout?.on('data', (d) => { stdout += d; });
+    child.stderr?.on('data', (d) => { stderr += d; });
+    child.on('close', (code) => resolve({ stdout, stderr, code }));
+    child.on('error', (e) => resolve({ stdout: '', stderr: String(e), code: -1 }));
+  });
+});
+
 // Shell: show item in folder
 ipcMain.handle('shell:showItemInFolder', async (_, path: string) => {
   shell.showItemInFolder(path);
@@ -2356,12 +2511,15 @@ ipcMain.handle('runtime:check', async () => {
   const nodeVersion = await getNodeVersion();
   const pm = await detectPackageManager();
 
-  // Check openclaw CLI
-  const openclawExists = existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`);
+  // Check openclaw CLI — also check bundled openclaw for offline use
+  const bundledOpenClaw = join(process.resourcesPath || '', 'app.asar.unpacked', 'bundle-openclaw', 'openclaw.mjs');
+  const openclawExists = existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`) || existsSync(`${homedir()}/.local/bin/openclaw`) || existsSync(bundledOpenClaw);
   let openclawVersion: string | null = null;
   if (openclawExists) {
     try {
-      const child = spawn('openclaw', ['--version'], { shell: true, timeout: 5000 });
+      // Try system openclaw first, then bundled
+      const openclawCmd = (existsSync('/usr/bin/openclaw') || existsSync(`${homedir()}/.npm-global/bin/openclaw`) || existsSync(`${homedir()}/.local/bin/openclaw`)) ? 'openclaw' : bundledOpenClaw;
+      const child = spawn('node', [openclawCmd, '--version'], { shell: true, timeout: 5000 });
       await new Promise<void>((resolve) => {
         let out = '';
         child.stdout.on('data', (d) => { out += d.toString(); });
@@ -2474,7 +2632,7 @@ ipcMain.handle('runtime:installNode', async () => {
   }
 });
 
-// runtime:installOpenClaw — install openclaw CLI via npm/pnpm/bun
+// runtime:installOpenClaw — create symlink to bundled openclaw (offline-capable)
 ipcMain.handle('runtime:installOpenClaw', async () => {
   const onProgress = (msg: string) => {
     mainWindow?.webContents?.send('runtime:progress', { phase: 'openclaw', message: msg });
@@ -2482,63 +2640,62 @@ ipcMain.handle('runtime:installOpenClaw', async () => {
 
   try {
     // Check if already installed
-    const paths = ['/usr/bin/openclaw', `${homedir()}/.npm-global/bin/openclaw`];
+    const paths = ['/usr/bin/openclaw', `${homedir()}/.npm-global/bin/openclaw`, `${homedir()}/.local/bin/openclaw`];
     if (paths.some((p) => existsSync(p))) {
       onProgress('OpenClaw CLI already installed');
       return { success: true };
     }
 
-    const pm = await detectPackageManager();
-    if (!pm) {
-      return { success: false, error: 'No package manager found (npm/pnpm/bun)' };
+    // Use bundled openclaw (offline, no npm needed)
+    const bundledOpenClaw = join(process.resourcesPath || '', 'app.asar.unpacked', 'bundle-openclaw', 'openclaw.mjs');
+    if (!existsSync(bundledOpenClaw)) {
+      return { success: false, error: 'Bundled openclaw not found in app package' };
     }
 
-    onProgress(`Installing OpenClaw CLI via ${pm}...`);
+    onProgress('Setting up OpenClaw CLI from bundled package...');
 
-    // Install globally with the detected package manager
-    const installCmd = pm === 'bun'
-      ? 'bun add -g openclaw'
-      : `${pm} install -g openclaw`;
+    // Create ~/.local/bin if it doesn't exist
+    const localBinDir = `${homedir()}/.local/bin`;
+    if (!existsSync(localBinDir)) {
+      spawn('mkdir', ['-p', localBinDir]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    }
 
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(installCmd, [], {
-        shell: true,
-        env: { ...process.env, npm_config_global: 'true' },
+    // Create symlink: ~/.local/bin/openclaw -> bundled openclaw.mjs
+    const symlinkPath = `${localBinDir}/openclaw`;
+    if (existsSync(symlinkPath)) {
+      spawn('rm', ['-f', symlinkPath]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    }
+
+    try {
+      const linkChild = spawn('ln', ['-s', bundledOpenClaw, symlinkPath], { shell: true });
+      await new Promise<void>((resolve, reject) => {
+        linkChild.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ln failed: ${code}`)));
+        linkChild.on('error', reject);
       });
-      let stderr = '';
-      child.stderr.on('data', (d) => { stderr += d.toString(); });
-      child.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Install failed: ${stderr || `exit code ${code}`}`));
-      });
-      child.on('error', (e) => reject(e));
-    });
+    } catch {
+      // Fallback: copy the file
+      spawn('cp', [bundledOpenClaw, symlinkPath]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    }
 
-    // Find the installed binary
+    // Verify
     let verOut = '';
-    const binPaths = [
-      '/usr/bin/openclaw',
-      `${homedir()}/.npm-global/bin/openclaw`,
-      `${homedir()}/.local/share/npm-global/bin/openclaw`,
-    ];
-    for (const p of binPaths) {
-      if (existsSync(p)) {
-        try {
-          const child = spawn(p, ['--version'], { shell: true, timeout: 5000 });
-          await new Promise<void>((res) => {
-            child.stdout.on('data', (d) => { verOut += d.toString(); });
-            child.on('close', () => res());
-          });
-          break;
-        } catch {}
-      }
-    }
+    try {
+      const verifyChild = spawn('node', [symlinkPath, '--version'], { shell: true, timeout: 5000 });
+      await new Promise<void>((res) => {
+        verifyChild.stdout.on('data', (d) => { verOut += d.toString(); });
+        verifyChild.on('close', () => res());
+        verifyChild.on('error', () => res());
+      });
+    } catch {}
 
-    onProgress(`OpenClaw ${verOut.trim() || 'CLI'} installed successfully`);
+    onProgress(`OpenClaw CLI ${verOut.trim() || ''} ready (bundled)`);
     return { success: true, version: verOut.trim() || undefined };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    onProgress(`OpenClaw installation failed: ${error}`);
+    onProgress(`OpenClaw setup failed: ${error}`);
     return { success: false, error };
   }
 });
@@ -2763,148 +2920,138 @@ ipcMain.handle('provider:validateKey', async (_, providerId: string, apiKey: str
 });
 
 // Install OpenClaw and start gateway service
+// Install OpenClaw and start gateway service
+// NOTE: In the bundled AppImage, we use the bundled openclaw directly from
+// app.asar.unpacked and start the gateway via 'gateway run' (NOT systemd).
+// The old daemon install/start approach is removed because:
+//   1. npm install tries to fetch from the internet (fails in offline mode)
+//   2. daemon install creates a systemd service that conflicts with the running gateway
+//   3. execSync with large pipe output can cause heap corruption in Node.js
 ipcMain.handle('uv:install-all', async () => {
   const { execSync, spawn } = require('child_process');
-  const { homedir } = require('os');
+  const path = require('path');
 
-  const log = (msg: string) => console.log(`[uv:install] ${msg}`);
-  const error = (msg: string) => console.error(`[uv:install] ERROR: ${msg}`);
+  const log = (msg: string) => console.log('[uv:install] ' + msg);
+  const error = (msg: string) => console.error('[uv:install] ERROR: ' + msg);
   const progress = (step: number, total: number, message: string) => {
     mainWindow?.webContents.send('install:progress', { step, total, message, percent: Math.round((step / total) * 100) });
   };
 
-  const TOTAL_STEPS = 8;
+  const TOTAL_STEPS = 5;
+
+  // Bundled openclaw path inside AppImage
+  const bundledOpenclaw = path.join(
+    process.resourcesPath,
+    'app.asar.unpacked',
+    'bundle-openclaw',
+    'openclaw.mjs'
+  );
 
   try {
-    // Step 1: Check if OpenClaw CLI is installed
-    progress(1, TOTAL_STEPS, 'Checking OpenClaw installation...');
-    log('Checking OpenClaw installation...');
-    let openclawInstalled = false;
+    // Step 1: Verify bundled openclaw exists and works
+    progress(1, TOTAL_STEPS, 'Checking OpenClaw bundle...');
+    log('Checking bundled openclaw: ' + bundledOpenclaw);
     try {
-      execSync('which openclaw', { encoding: 'utf8', timeout: 5000 });
-      openclawInstalled = true;
-      log('OpenClaw CLI found');
-    } catch {
-      log('OpenClaw CLI not found, will install via npm');
+      execSync('node "' + bundledOpenclaw + '" --version', {
+        encoding: 'utf8',
+        timeout: 10000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 256 * 1024,
+      });
+      log('Bundled openclaw OK');
+    } catch (e: unknown) {
+      const emsg = e instanceof Error ? e.message : String(e);
+      error('Bundled openclaw check failed: ' + emsg);
+      return { success: false, error: 'OpenClaw bundle not functional: ' + emsg };
     }
 
-    // Step 2: Install OpenClaw if not present
-    if (!openclawInstalled) {
-      progress(2, TOTAL_STEPS, 'Installing OpenClaw via npm...');
-      log('Installing OpenClaw via npm...');
-      try {
-        execSync('npm install -g openclaw', {
-          encoding: 'utf8',
-          timeout: 120000,
-          stdio: ['ignore', 'pipe', 'pipe'],
+    // Step 2: Check if gateway is already running via HTTP health check
+    progress(2, TOTAL_STEPS, 'Checking gateway status...');
+    log('Checking if gateway is already running...');
+    let gatewayRunning = false;
+    try {
+      const http = require('http');
+      gatewayRunning = await new Promise<boolean>((resolve) => {
+        const req = http.get('http://127.0.0.1:18789/health', (res: any) => {
+          let data = '';
+          res.on('data', (chunk: string) => { data += chunk; });
+          res.on('end', () => {
+            try {
+              const json = JSON.parse(data);
+              resolve(json.ok === true);
+            } catch { resolve(false); }
+          });
         });
-        log('OpenClaw installed successfully');
+        req.on('error', () => resolve(false));
+        req.setTimeout(3000, () => { req.destroy(); resolve(false); });
+      });
+      log('Gateway already running: ' + gatewayRunning);
+    } catch { log('Gateway health check failed'); }
+
+    // Step 3: If not running, start via 'gateway run' (NOT daemon install/start)
+    if (!gatewayRunning) {
+      progress(3, TOTAL_STEPS, 'Starting gateway...');
+      log('Starting gateway via gateway run...');
+      try {
+        spawn('setsid', [
+          'node', bundledOpenclaw, 'gateway', 'run',
+          '--auth', 'none',
+          '--allow-unconfigured',
+          '--port', '18789',
+          '--force',
+        ], {
+          detached: true,
+          stdio: 'ignore',
+          cwd: require('os').homedir(),
+        }).unref();
+        log('Gateway spawn started, waiting...');
       } catch (e: unknown) {
-        const emsg = e instanceof Error ? (e as Error).message : String(e);
-        const errMsg = (e as { stderr?: string }).stderr || emsg || 'Unknown npm error';
-        error(`npm install failed: ${errMsg}`);
-        return { success: false, error: `Failed to install OpenClaw: ${errMsg}` };
+        const emsg = e instanceof Error ? e.message : String(e);
+        error('Failed to spawn gateway: ' + emsg);
+        return { success: false, error: 'Gateway start failed: ' + emsg };
       }
+    } else {
+      progress(3, TOTAL_STEPS, 'Gateway already running');
     }
 
-    // Step 3: Verify openclaw CLI works
-    progress(3, TOTAL_STEPS, 'Verifying OpenClaw CLI...');
-    try {
-      const version = execSync('openclaw --version', { encoding: 'utf8', timeout: 10000 }).trim();
-      log(`OpenClaw version: ${version}`);
-    } catch (e: unknown) {
-      const emsg = e instanceof Error ? e.message : String(e);
-      error(`OpenClaw CLI not working: ${emsg}`);
-      return { success: false, error: 'OpenClaw CLI installed but not functional' };
-    }
-
-    // Step 4: Check if gateway service is installed
-    progress(4, TOTAL_STEPS, 'Checking gateway service...');
-    log('Checking gateway service status...');
-    let serviceInstalled = false;
-    try {
-      const status = execSync('openclaw daemon status', { encoding: 'utf8', timeout: 15000 });
-      serviceInstalled = status.includes('installed') || status.includes('running') || status.includes('active');
-      log(`Gateway service status: ${status.substring(0, 100)}`);
-    } catch {
-      log('Gateway service not installed');
-    }
-
-    // Step 5: Install gateway service if not present
-    if (!serviceInstalled) {
-      progress(5, TOTAL_STEPS, 'Installing gateway service...');
-      log('Installing gateway service...');
-      try {
-        // Try to install as system service (may need sudo)
-        execSync('openclaw daemon install', { encoding: 'utf8', timeout: 60000 });
-        log('Gateway service installed');
-      } catch (e) {
-        // Fallback: try user-level service
-        log('System install failed, trying user-level...');
-        try {
-          execSync('openclaw daemon install --user', { encoding: 'utf8', timeout: 60000 });
-          log('Gateway service installed (user level)');
-        } catch (e2: unknown) {
-          const e2msg = e2 instanceof Error ? e2.message : String(e2);
-          error(`Failed to install gateway service: ${e2msg}`);
-          return { success: false, error: `Gateway service installation failed: ${e2msg}` };
-        }
-      }
-    }
-
-    // Step 6: Start the gateway service
-    progress(6, TOTAL_STEPS, 'Starting gateway service...');
-    log('Starting gateway service...');
-    try {
-      execSync('openclaw daemon start', { encoding: 'utf8', timeout: 30000 });
-      log('Gateway started');
-    } catch (e: unknown) {
-      const emsg = e instanceof Error ? e.message : String(e);
-      log(`Start returned: ${emsg}`);
-    }
-
-    // Step 7: Wait for gateway to be ready and verify
-    progress(7, TOTAL_STEPS, 'Verifying gateway...');
-    log('Verifying gateway is running...');
-    const maxWait = 30;
+    // Step 4: Wait for gateway to be ready (max 20s)
+    progress(4, TOTAL_STEPS, 'Verifying gateway...');
+    log('Waiting for gateway to become ready...');
+    const http = require('http');
     let gatewayReady = false;
-    for (let i = 0; i < maxWait; i++) {
-      try {
-        const status = execSync('openclaw daemon status', { encoding: 'utf8', timeout: 5000 });
-        if (status.includes('running') || status.includes('active')) {
-          gatewayReady = true;
-          log(`Gateway is running (waited ${i}s)`);
-          break;
-        }
-      } catch {
-        // Not ready yet
-      }
+    for (let i = 0; i < 20; i++) {
       await new Promise((r) => setTimeout(r, 1000));
+      try {
+        gatewayReady = await new Promise<boolean>((resolve) => {
+          const req = http.get('http://127.0.0.1:18789/health', (res: any) => {
+            let data = '';
+            res.on('data', (chunk: string) => { data += chunk; });
+            res.on('end', () => {
+              try { resolve(JSON.parse(data).ok === true); }
+              catch { resolve(false); }
+            });
+          });
+          req.on('error', () => resolve(false));
+          req.setTimeout(2000, () => { req.destroy(); resolve(false); });
+        });
+        if (gatewayReady) { log('Gateway ready after ' + (i + 1) + 's'); break; }
+      } catch { /* continue */ }
     }
 
     if (!gatewayReady) {
-      error('Gateway did not become ready in time');
-      return { success: false, error: 'Gateway service failed to start within 30 seconds' };
+      error('Gateway did not become ready in 20 seconds');
+      return { success: false, error: 'Gateway failed to start within 20 seconds' };
     }
 
-    // Step 8: Final verification
-    progress(8, TOTAL_STEPS, 'Finalizing...');
-    log('Final verification...');
-    try {
-      const probe = execSync('openclaw config get gateway.port 2>/dev/null || echo 19001', { encoding: 'utf8', timeout: 5000 }).trim();
-      log(`Gateway configured on port: ${probe}`);
-    } catch {
-      // Non-fatal
-    }
-
+    // Step 5: Done
+    progress(5, TOTAL_STEPS, 'Complete!');
     log('Installation complete');
     return { success: true };
-  } catch (e: unknown) {
-    const errmsg = e instanceof Error ? e.message : String(e);
-    error(`Unexpected error: ${errmsg}`);
-    return { success: false, error: errmsg };
+  } catch (err) {
+    error('Unexpected error: ' + String(err));
+    return { success: false, error: String(err) };
   }
-});
+});;
 
 // Window management
 ipcMain.handle('window:minimize', () => {
@@ -2965,6 +3112,19 @@ ipcMain.handle('ssh:screenshot', async (_, host: string, user: string) => {
     });
     proc.on('error', (err) => resolve({ ok: false, error: err.message }));
   });
+});
+
+// Agent order persistence (Dashboard drag-and-drop)
+ipcMain.handle('dashboard:loadAgentOrder', () => {
+  const settings = readOrionSettings();
+  return (settings.agentOrder as string[] | undefined) || null;
+});
+
+ipcMain.handle('dashboard:saveAgentOrder', (_, orderedIds: string[]) => {
+  const settings = readOrionSettings();
+  settings.agentOrder = orderedIds;
+  writeOrionSettings(settings);
+  return { ok: true };
 });
 
 app.whenReady().then(async () => {

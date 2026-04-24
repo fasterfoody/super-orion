@@ -1,6 +1,6 @@
 {
     "title": "系统状态",
-    "subtitle": "猎户座控制面板",
+    "subtitle": "猎户座员工间",
     "subtitleWithVersion": "OpenClaw Gateway v{{version}}",
     "healthChecks": "健康检查",
     "refresh": "刷新",

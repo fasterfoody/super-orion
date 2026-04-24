@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { hostApiFetch } from '@/lib/host-api';
+import { invokeIpc } from '@/lib/api-client';
 import type { ChannelType } from '@/types/channel';
 import type { AgentSummary, AgentsSnapshot } from '@/types/agent';
 
@@ -64,7 +65,45 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   fetchAgents: async () => {
     set({ loading: true, error: null });
     try {
-      const snapshot = await hostApiFetch<AgentsSnapshot & { success?: boolean }>('/api/agents');
+      // Query all independent agent gateways in parallel via IPC
+      const rawAgents = await invokeIpc<Array<{
+        id?: string; name?: string; workspace?: string;
+        model?: { primary?: string }; _gatewayLabel?: string; _gatewayPort?: number;
+      }>>('agents:list-all');
+
+      const agents: AgentSummary[] = (rawAgents || []).map((a) => ({
+        id: a.id || a._gatewayLabel || 'unknown',
+        name: a.name || a.id || a._gatewayLabel || 'Unknown',
+        isDefault: a.id === 'main' || a._gatewayLabel === 'main',
+        modelDisplay: a.model?.primary?.split('/').pop() || '',
+        modelRef: a.model?.primary || null,
+        overrideModelRef: null,
+        inheritedModel: false,
+        workspace: a.workspace || '',
+        agentDir: '',
+        mainSessionKey: '',
+        channelTypes: [],
+        provider: a.model?.primary?.split('/')[0] || '',
+        modelId: a.model?.primary?.split('/').pop() || '',
+        sessionCount: 0,
+        skillCount: 0,
+        skills: [],
+        tools: [],
+        remoteNodeIp: '',
+        description: '',
+        identityEmoji: '⚡',
+        identityVibe: '',
+      }));
+
+      const snapshot: AgentsSnapshot = {
+        agents,
+        defaultAgentId: 'main',
+        defaultModelRef: null,
+        configuredChannelTypes: [],
+        channelOwners: {},
+        channelAccountOwners: {},
+      };
+
       set({
         ...applySnapshot(snapshot),
         loading: false,

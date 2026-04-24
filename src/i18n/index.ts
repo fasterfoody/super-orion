@@ -28,33 +28,33 @@ import zhSkills from './locales/zh/skills.json';
 import zhCron from './locales/zh/cron.json';
 import zhSetup from './locales/zh/setup.json';
 
-// JA
-import jaCommon from './locales/ja/common.json';
-import jaSettings from './locales/ja/settings.json';
-import jaDashboard from './locales/ja/dashboard.json';
-import jaChat from './locales/ja/chat.json';
-import jaChannels from './locales/ja/channels.json';
-import jaAgents from './locales/ja/agents.json';
-import jaSkills from './locales/ja/skills.json';
-import jaCron from './locales/ja/cron.json';
-import jaSetup from './locales/ja/setup.json';
+// KM (Cambodian) - using EN as placeholder
+import kmCommon from './locales/km/common.json';
+import kmSettings from './locales/km/settings.json';
+import kmDashboard from './locales/km/dashboard.json';
+import kmChat from './locales/km/chat.json';
+import kmChannels from './locales/km/channels.json';
+import kmAgents from './locales/km/agents.json';
+import kmSkills from './locales/km/skills.json';
+import kmCron from './locales/km/cron.json';
+import kmSetup from './locales/km/setup.json';
 
-// RU
-import ruCommon from './locales/ru/common.json';
-import ruSettings from './locales/ru/settings.json';
-import ruDashboard from './locales/ru/dashboard.json';
-import ruChat from './locales/ru/chat.json';
-import ruChannels from './locales/ru/channels.json';
-import ruAgents from './locales/ru/agents.json';
-import ruSkills from './locales/ru/skills.json';
-import ruCron from './locales/ru/cron.json';
-import ruSetup from './locales/ru/setup.json';
+// ID (Indonesian) - using EN as placeholder
+import idCommon from './locales/id/common.json';
+import idSettings from './locales/id/settings.json';
+import idDashboard from './locales/id/dashboard.json';
+import idChat from './locales/id/chat.json';
+import idChannels from './locales/id/channels.json';
+import idAgents from './locales/id/agents.json';
+import idSkills from './locales/id/skills.json';
+import idCron from './locales/id/cron.json';
+import idSetup from './locales/id/setup.json';
 
 export const SUPPORTED_LANGUAGES = [
     { code: 'en', label: 'English' },
     { code: 'zh', label: '中文' },
-    { code: 'ja', label: '日本語' },
-    { code: 'ru', label: 'Русский' },
+    { code: 'km', label: 'Khmer' },
+    { code: 'id', label: 'Bahasa Indonesia' },
 ] as const satisfies ReadonlyArray<{ code: LanguageCode; label: string }>;
 
 const resources = {
@@ -80,27 +80,27 @@ const resources = {
         cron: zhCron,
         setup: zhSetup,
     },
-    ja: {
-        common: jaCommon,
-        settings: jaSettings,
-        dashboard: jaDashboard,
-        chat: jaChat,
-        channels: jaChannels,
-        agents: jaAgents,
-        skills: jaSkills,
-        cron: jaCron,
-        setup: jaSetup,
+    km: {
+        common: kmCommon,
+        settings: kmSettings,
+        dashboard: kmDashboard,
+        chat: kmChat,
+        channels: kmChannels,
+        agents: kmAgents,
+        skills: kmSkills,
+        cron: kmCron,
+        setup: kmSetup,
     },
-    ru: {
-        common: ruCommon,
-        settings: ruSettings,
-        dashboard: ruDashboard,
-        chat: ruChat,
-        channels: ruChannels,
-        agents: ruAgents,
-        skills: ruSkills,
-        cron: ruCron,
-        setup: ruSetup,
+    id: {
+        common: idCommon,
+        settings: idSettings,
+        dashboard: idDashboard,
+        chat: idChat,
+        channels: idChannels,
+        agents: idAgents,
+        skills: idSkills,
+        cron: idCron,
+        setup: idSetup,
     },
 };
 
@@ -114,7 +114,7 @@ i18n
         defaultNS: 'common',
         ns: ['common', 'settings', 'dashboard', 'chat', 'channels', 'agents', 'skills', 'cron', 'setup'],
         interpolation: {
-            escapeValue: false, // React already escapes
+            escapeValue: false,
         },
         react: {
             useSuspense: false,

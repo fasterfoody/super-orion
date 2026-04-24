@@ -31,8 +31,10 @@ import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { hostApiFetch } from '@/lib/host-api';
+import { invokeIpc } from '@/lib/api-client';
+import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
-import logoSvg from '@/assets/logo.svg';
+import shrimpImg from '@/assets/shrimp.jpg';
 
 type SessionBucketKey =
   | 'today'
@@ -217,7 +219,7 @@ export function Sidebar() {
     { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
     { to: '/agents', icon: <Bot className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.agents'), testId: 'sidebar-nav-agents' },
     { to: '/sessions', icon: <MessagesSquare className="h-[18px] w-[18px]" strokeWidth={2} />, label: '所有会话', testId: 'sidebar-nav-sessions' },
-    { to: '/remote', icon: <Terminal className="h-[18px] w-[18px]" strokeWidth={2} />, label: 'Remote', testId: 'sidebar-nav-remote' },
+    { to: '/remote', icon: <Terminal className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.starfield'), testId: 'sidebar-nav-remote' },
     { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
     { to: '/cron', icon: <Clock className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron' },
@@ -235,7 +237,23 @@ export function Sidebar() {
       <div className={cn("flex items-center p-2 h-12", sidebarCollapsed ? "justify-center" : "justify-between")}>
         {!sidebarCollapsed && (
           <div className="flex items-center gap-2 px-2 overflow-hidden">
-            <img src={logoSvg} alt="猎户座" className="h-5 w-auto shrink-0" />
+            <img
+              src={shrimpImg}
+              alt="猎户座"
+              className="h-8 w-auto shrink-0 rounded cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={async () => {
+                try {
+                  toast.info('正在清理残留进程...');
+                  const r = await invokeIpc<{ stdout: string; stderr: string; code: number }>(
+                    'shell:exec',
+                    'pkill -9 firefox 2>/dev/null; pkill -9 geckodriver 2>/dev/null; echo done'
+                  );
+                  toast.success('清理完成');
+                } catch {
+                  toast.error('清理失败');
+                }
+              }}
+            />
             <span className="text-sm font-semibold truncate whitespace-nowrap text-foreground/90">
               猎户座
             </span>
@@ -288,7 +306,7 @@ export function Sidebar() {
           onClick={() => {
             const { messages } = useChatStore.getState();
             if (messages.length > 0) newSession();
-            navigate('/');
+            navigate('/chat');
           }}
           className={cn(
             'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors mb-2',
